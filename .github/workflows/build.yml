@@ -1,0 +1,145 @@
+name: Build PLF110 kernel (6.1.134 + Droidspaces)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lto:
+        description: "LTO: none = fast, CFI off (default) / thin = stock-like, CFI on (slow)"
+        type: choice
+        options:
+          - none
+          - thin
+        default: none
+      debug_info:
+        description: "Keep debug info + KASAN/BTF (very slow, debugging only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  KERNEL_REPO: OnePlusOSS/android_kernel_oneplus_mt6989
+  KERNEL_COMMIT: 770ca1ea1e23e4451b1c19e247c5e36c8c9a2415
+  PATCH_RAW: https://raw.githubusercontent.com/WildKernels/kernel_patches/main
+  CLANG_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/clang-28b975ada54f8610ed531a6b57253aed10e7c87d.tar.gz
+  AK3_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/AnyKernel3-0b46673ae91aee8d60bd6ee257b4d56d3f6a0114.tar.gz
+  NAME: PLF110-A16-6.1.134
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost 2>/dev/null || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            lz4 zstd cpio kmod rsync zip unzip python3 git curl aria2 dos2unix ca-certificates
+
+      - name: Fetch clang r487747c
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/toolchain"
+          cd "$RUNNER_TEMP/toolchain"
+          aria2c -q -x8 -s8 -k1M --file-allocation=none --console-log-level=error \
+                 -o clang.tar.gz "$CLANG_URL"
+          tar -xzf clang.tar.gz --wildcards '*/clang-r487747c/*' || tar -xzf clang.tar.gz
+          BIN_DIR="$(dirname "$(find . -type f -path '*/clang-r487747c/bin/clang' | head -n1)")"
+          echo "CLANG_BIN=$PWD/${BIN_DIR#./}" >> "$GITHUB_ENV"
+          "$PWD/${BIN_DIR#./}/clang" --version | head -n1
+
+      - name: Fetch kernel source
+        run: |
+          set -e
+          curl -LfsS --retry 3 -o kernel.tar.gz \
+            "https://codeload.github.com/${KERNEL_REPO}/tar.gz/${KERNEL_COMMIT}"
+          tar -xzf kernel.tar.gz
+          KDIR="$(find . -maxdepth 1 -type d -name 'android_kernel_oneplus_mt6989-*' | head -n1)"
+          echo "KDIR=$GITHUB_WORKSPACE/${KDIR#./}" >> "$GITHUB_ENV"
+          echo "source: $(basename "$KDIR")"
+          head -n5 "$KDIR/Makefile"
+
+      - name: Apply patches and config
+        env:
+          LTO_MODE: ${{ inputs.lto }}
+        run: |
+          set -e
+          set -a
+          . config/features.env
+          set +a
+          bash scripts/prepare.sh
+
+      - name: Build Image
+        run: |
+          set -e
+          cd "$KDIR"
+          export PATH="$CLANG_BIN:$PATH"
+          export ARCH=arm64 LLVM=1
+          make -j"$(nproc)" O=out gki_defconfig
+          make -j"$(nproc)" O=out olddefconfig
+
+          echo "---- config check ----"
+          for opt in SYSVIPC POSIX_MQUEUE PID_NS IPC_NS USER_NS DEVTMPFS MACVLAN \
+                     IP_SET IP6_NF_NAT TMPFS_XATTR; do
+            grep -q "^CONFIG_${opt}=y$" out/.config \
+              || { echo "::error::missing CONFIG_${opt}"; exit 1; }
+          done
+          if [ "${{ inputs.debug_info }}" != "true" ] && grep -q '^CONFIG_KASAN=y$' out/.config; then
+            echo "::error::KASAN still enabled"; exit 1
+          fi
+          grep -E '^CONFIG_(LTO|CFI|TCP_CONG_BBR|NTFS3_FS|SQUASHFS|NTSYNC|CGROUP_PIDS|CFS_BANDWIDTH)=' \
+            out/.config || true
+
+          make -j"$(nproc)" O=out Image 2>&1 | tee build.log
+
+      - name: Validate Image
+        run: |
+          set -e
+          IMG="$KDIR/out/arch/arm64/boot/Image"
+          [ -f "$IMG" ] || { echo "::error::Image not found"; exit 1; }
+          file "$IMG"
+          ls -lh "$IMG"
+          strings "$IMG" | grep -E 'Linux version 6\.1\.134' | head -n 2 \
+            || { echo "::error::kernel version is not 6.1.134"; exit 1; }
+
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          cp "$IMG" "$GITHUB_WORKSPACE/artifacts/Image"
+          cp "$KDIR/out/.config" "$GITHUB_WORKSPACE/artifacts/kernel.config"
+          cp "$KDIR/build.log" "$GITHUB_WORKSPACE/artifacts/build.log" 2>/dev/null || true
+          sha256sum "$GITHUB_WORKSPACE/artifacts/Image" \
+            | tee "$GITHUB_WORKSPACE/artifacts/Image.sha256"
+
+      - name: Package AnyKernel3 zip
+        run: |
+          set -e
+          cd "$GITHUB_WORKSPACE"
+          curl -LfsS --retry 3 -o ak3.tar.gz "$AK3_URL"
+          mkdir -p ak3
+          tar -xzf ak3.tar.gz -C ak3
+          AK3DIR="$(find ak3 -maxdepth 1 -mindepth 1 -type d | head -n1)"
+          cp artifacts/Image "$AK3DIR/Image"
+          sed -i 's|^kernel.string=.*|kernel.string=PLF110 6.1.134 (Droidspaces) custom build|' \
+            "$AK3DIR/anykernel.sh"
+          ( cd "$AK3DIR" && zip -q -r9 "$GITHUB_WORKSPACE/artifacts/AK3_${NAME}-$(date +%Y%m%d).zip" . )
+          ls -lh artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ env.NAME }}-${{ github.run_number }}
+          path: artifacts/**
+          if-no-files-found: error
+          retention-days: 30
