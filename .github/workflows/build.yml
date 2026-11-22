@@ -21,6 +21,12 @@ permissions:
 env:
   KERNEL_REPO: OnePlusOSS/android_kernel_oneplus_mt6989
   KERNEL_COMMIT: 770ca1ea1e23e4451b1c19e247c5e36c8c9a2415
+  # 厂商 modules/devicetree 树：内核树里的 drivers/soc/oplus/* 等是符号链接，
+  # 指向 ../../../../vendor/oplus/...（OPLUS kernel_platform 布局），必须一起取，
+  # 否则 Kconfig 解析直接失败：can't open file "drivers/soc/oplus/oplus_resctrl/Kconfig"
+  # 与 KERNEL_COMMIT 来自同一次同步（PLF110_16.0.5.701，2026-04-15）
+  MODULES_REPO: OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_mt6989
+  MODULES_COMMIT: c34cf6fe74689af84e5bb3c544fe20ff4b9464a0
   PATCH_RAW: https://raw.githubusercontent.com/WildKernels/kernel_patches/main
   CLANG_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/clang-28b975ada54f8610ed531a6b57253aed10e7c87d.tar.gz
   AK3_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/AnyKernel3-0b46673ae91aee8d60bd6ee257b4d56d3f6a0114.tar.gz
@@ -61,16 +67,44 @@ jobs:
           echo "CLANG_BIN=$PWD/${BIN_DIR#./}" >> "$GITHUB_ENV"
           "$PWD/${BIN_DIR#./}/clang" --version | head -n1
 
-      - name: Fetch kernel source
+      - name: Fetch kernel source + vendor modules
         run: |
           set -e
+          # 1) GKI 内核树（common）
           curl -LfsS --retry 3 -o kernel.tar.gz \
             "https://codeload.github.com/${KERNEL_REPO}/tar.gz/${KERNEL_COMMIT}"
           tar -xzf kernel.tar.gz
           KDIR="$(find . -maxdepth 1 -type d -name 'android_kernel_oneplus_mt6989-*' | head -n1)"
+
+          # 2) 厂商 modules/devicetree 树：解到工作区根，得到 kernel/ 和 vendor/
+          #    内核树里的符号链接形如 ../../../../vendor/oplus/kernel/...
+          #    （从 <内核树>/drivers/soc/oplus 上 4 层 = 工作区根），布局对了才能解析
+          curl -LfsS --retry 3 -o modules.tar.gz \
+            "https://codeload.github.com/${MODULES_REPO}/tar.gz/${MODULES_COMMIT}"
+          tar -xzf modules.tar.gz -C "$GITHUB_WORKSPACE" --strip-components=1
+
           echo "KDIR=$GITHUB_WORKSPACE/${KDIR#./}" >> "$GITHUB_ENV"
           echo "source: $(basename "$KDIR")"
           head -n5 "$KDIR/Makefile"
+
+          # 3) 校验厂商符号链接全部能解析（不解析 → make gki_defconfig 直接报 can't open file）
+          bad=0
+          for p in drivers/soc/oplus/oplus_resctrl/Kconfig \
+                   drivers/soc/oplus/storage/Kconfig \
+                   include/soc/oplus/storage \
+                   kernel/oplus_cpu \
+                   kernel/locking/locking_main.h \
+                   kernel/locking/oplus_locking.c \
+                   kernel/locking/sa_common_struct.h \
+                   mm/mm-trace.h; do
+            if [ ! -e "$KDIR/$p" ]; then
+              echo "::error::vendor 符号链接未解析: $p"
+              bad=1
+            fi
+          done
+          [ "$bad" -eq 0 ]
+          echo "vendor symlink 检查通过（$(du -sh "$GITHUB_WORKSPACE/vendor" | cut -f1)）"
+          df -h / | tail -n1
 
       - name: Apply patches and config
         env:

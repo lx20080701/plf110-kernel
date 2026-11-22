@@ -2,7 +2,7 @@
 
 在 **GitHub Actions 免费云端**编译你手机的内核：
 
-- 源码：`OnePlusOSS/android_kernel_oneplus_mt6989` @ `770ca1ea`（PLF110_16.0.5.701，内核 **6.1.134**）
+- 源码：`OnePlusOSS/android_kernel_oneplus_mt6989` @ `770ca1ea`（PLF110_16.0.5.701，内核 **6.1.134**）+ 同批次的厂商树 `android_kernel_modules_and_devicetree_oneplus_mt6989` @ `c34cf6fe`（内核树里 `drivers/soc/oplus/*` 等符号链接指向它的 `vendor/oplus/...`，缺了 Kconfig 解析直接失败）
 - 输出：`Image`（ARM64 内核镜像）+ 可刷入的 AnyKernel3 zip
 - 已内置：**Droidspaces 内核支持**（kABI 补丁 + SYSVIPC/PID_NS/IPC_NS/USER_NS 等配置）
 - 你的编译产物还可以保留 **FolkPatch** root（刷机流程见文末）
