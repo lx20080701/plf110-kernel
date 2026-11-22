@@ -127,6 +127,7 @@ CONFIG_IP_NF_TARGET_REJECT=y
 CONFIG_IP6_NF_TARGET_REJECT=y
 CONFIG_TMPFS_XATTR=y
 CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_NETFILTER_ADVANCED=y
 EOF
 
 # --- BBR ---
@@ -261,36 +262,39 @@ CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y
 EOF
 fi
 
-# --- 默认网络调优 ---
+# --- 默认网络调优（用 Kconfig 可见的 choice 选项，不能直接写派生字符串） ---
 if [ "${NET_DEFAULTS:-false}" = "true" ]; then
   {
     echo
     echo '# ==== 默认网络调优 ===='
-    if [ "${BBR:-true}" = "true" ]; then echo 'CONFIG_DEFAULT_TCP_CONG="bbr"'; fi
-    if [ "${NETSCHED:-true}" = "true" ]; then echo 'CONFIG_DEFAULT_NET_SCH="fq"'; fi
+    if [ "${BBR:-true}" = "true" ]; then echo 'CONFIG_DEFAULT_BBR=y'; fi
+    if [ "${NETSCHED:-true}" = "true" ]; then
+      echo 'CONFIG_NET_SCH_DEFAULT=y'
+      echo 'CONFIG_DEFAULT_FQ=y'
+    fi
   } >> "$cfg"
 fi
 
 # ------------------------------------------------------------
-# 4. LTO / CFI
+# 4. LTO（CFI 不受影响：kcfi 不需要 LTO，保持原厂 CFI 开启以兼容 stock 模块）
 # ------------------------------------------------------------
 say "LTO 模式：${LTO_MODE:-thin}"
 case "${LTO_MODE:-thin}" in
   thin)
 cat >> "$cfg" <<'EOF'
 
-# ==== LTO thin（与原厂一致，CFI 保持开启） ====
-CONFIG_LTO_CLANG=y
+# ==== LTO thin（与原厂一致） ====
+# CONFIG_LTO_NONE is not set
 CONFIG_LTO_CLANG_THIN=y
 EOF
     ;;
   none)
 cat >> "$cfg" <<'EOF'
 
-# ==== 无 LTO（编译快；CFI 关闭） ====
+# ==== 无 LTO（编译快；CFI 仍然开启） ====
 CONFIG_LTO_NONE=y
-# CONFIG_LTO_CLANG is not set
-# CONFIG_CFI_CLANG is not set
+# CONFIG_LTO_CLANG_THIN is not set
+# CONFIG_LTO_CLANG_FULL is not set
 EOF
     ;;
   *)

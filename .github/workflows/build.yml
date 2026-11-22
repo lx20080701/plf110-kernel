@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       lto:
-        description: "LTO: none = fast, CFI off (default) / thin = stock-like, CFI on (slow)"
+        description: "LTO: thin = 与原厂一致(默认, 慢) / none = 快(CFI 仍保持开启)"
         type: choice
         options:
-          - none
           - thin
-        default: none
+          - none
+        default: thin
       debug_info:
         description: "Keep debug info + KASAN/BTF (very slow, debugging only)"
         type: boolean
@@ -99,7 +99,7 @@ jobs:
             grep -q "^CONFIG_${1}=y$" out/.config || { echo "::error::missing CONFIG_${1}"; exit 1; }
           }
           for opt in SYSVIPC POSIX_MQUEUE PID_NS IPC_NS UTS_NS USER_NS DEVTMPFS \
-                     MACVLAN TMPFS_XATTR TMPFS_POSIX_ACL; do
+                     MACVLAN TMPFS_XATTR TMPFS_POSIX_ACL NETFILTER_ADVANCED; do
             check "$opt"
           done
           if [ "${BBR:-true}" = "true" ]; then check TCP_CONG_BBR; fi
@@ -115,7 +115,8 @@ jobs:
             grep -q '^CONFIG_NTSYNC=y$' out/.config || echo "::warning::NTSync 未生效（补丁未应用全）"
           fi
           if [ "${NET_DEFAULTS:-false}" = "true" ]; then
-            grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || echo "::warning::默认 bbr 未写入"
+            grep -q '^CONFIG_DEFAULT_BBR=y$' out/.config || echo "::warning::DEFAULT_BBR 未生效"
+            grep -q '^CONFIG_DEFAULT_FQ=y$' out/.config || echo "::warning::DEFAULT_FQ 未生效"
           fi
           if [ "${{ inputs.debug_info }}" != "true" ]; then
             if grep -q '^CONFIG_KASAN=y$' out/.config; then
