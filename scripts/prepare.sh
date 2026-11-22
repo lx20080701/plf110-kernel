@@ -11,6 +11,7 @@ set -euo pipefail
 
 : "${KDIR:?KDIR 未设置}"
 : "${PATCH_RAW:?PATCH_RAW 未设置}"
+: "${STOCK_CONFIG:?STOCK_CONFIG 未设置（设备原厂 /proc/config.gz 解出来的配置）}"
 
 cd "$KDIR"
 
@@ -104,10 +105,16 @@ if [ "${PERF_TWEAKS:-false}" = "true" ]; then
 fi
 
 # ------------------------------------------------------------
-# 3. 写配置（追加到 gki_defconfig，Kconfig 后写覆盖前写）
+# 3. 写配置
+#    基线 = 设备原厂 /proc/config.gz（生产配置，含 ARCH_MEDIATEK/OPLUS/MTK 全套内置驱动）
+#    !! 不能用 Google 的 gki_defconfig：那是通用最小配置，缺 200+ 个原厂 =y 的
+#       MTK/OPLUS 内置驱动，导致第一段 init 挂载失败 → kernel panic "Attempted to kill init"
+#    Kconfig 后写覆盖前写，所以我们的增量直接 append 在后面
 # ------------------------------------------------------------
-cfg=arch/arm64/configs/gki_defconfig
-say "写入配置：$cfg"
+cfg=arch/arm64/configs/plf110_defconfig
+say "写入配置（原厂 config + 功能增量）：$cfg"
+[ -f "$STOCK_CONFIG" ] || { echo "STOCK_CONFIG 不存在: $STOCK_CONFIG" >&2; exit 1; }
+cp "$STOCK_CONFIG" "$cfg"
 
 # --- Droidspaces 核心（必须） ---
 cat >> "$cfg" <<'EOF'

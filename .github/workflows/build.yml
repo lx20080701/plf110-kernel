@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       lto:
-        description: "LTO: thin = 与原厂一致(默认, 慢) / none = 快(CFI 仍保持开启)"
+        description: "LTO: none = 与原厂一致(默认，必须选这个才最稳) / thin = 实验"
         type: choice
         options:
-          - thin
           - none
-        default: thin
+          - thin
+        default: none
       debug_info:
         description: "Keep debug info + KASAN/BTF (very slow, debugging only)"
         type: boolean
@@ -19,14 +19,17 @@ permissions:
   contents: read
 
 env:
+  # 与设备固件匹配的源码版本：
+  #   设备固件 PLF110_16.0.2.401(CN01) 构建于 2025-12-09（ro.bootimage.build.date）
+  #   对应 OnePlusOSS 上最接近的同步 = PLF110_16.0.0.203（2025-12-18），内核同样是 6.1.134
+  #   （之前用 16.0.5.701 + Google gki_defconfig 导致 init 起不来，详见 README）
   KERNEL_REPO: OnePlusOSS/android_kernel_oneplus_mt6989
-  KERNEL_COMMIT: 770ca1ea1e23e4451b1c19e247c5e36c8c9a2415
+  KERNEL_COMMIT: 700216a47c96d5b8c3247779730e308173dd7003
   # 厂商 modules/devicetree 树：内核树里的 drivers/soc/oplus/* 等是符号链接，
   # 指向 ../../../../vendor/oplus/...（OPLUS kernel_platform 布局），必须一起取，
   # 否则 Kconfig 解析直接失败：can't open file "drivers/soc/oplus/oplus_resctrl/Kconfig"
-  # 与 KERNEL_COMMIT 来自同一次同步（PLF110_16.0.5.701，2026-04-15）
   MODULES_REPO: OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_mt6989
-  MODULES_COMMIT: c34cf6fe74689af84e5bb3c544fe20ff4b9464a0
+  MODULES_COMMIT: ae37b666a22318d9de00ba011ac1e71ab1f1d010
   PATCH_RAW: https://raw.githubusercontent.com/WildKernels/kernel_patches/main
   CLANG_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/clang-28b975ada54f8610ed531a6b57253aed10e7c87d.tar.gz
   AK3_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/AnyKernel3-0b46673ae91aee8d60bd6ee257b4d56d3f6a0114.tar.gz
@@ -109,6 +112,7 @@ jobs:
       - name: Apply patches and config
         env:
           LTO_MODE: ${{ inputs.lto }}
+          STOCK_CONFIG: ${{ github.workspace }}/config/plf110_stock.config
         run: |
           set -e
           set -a
@@ -125,13 +129,19 @@ jobs:
           set +a
           export PATH="$CLANG_BIN:$PATH"
           export ARCH=arm64 LLVM=1
-          make -j"$(nproc)" O=out gki_defconfig
+          # prepare.sh 会把"设备原厂 /proc/config.gz"复制成 arch/arm64/configs/plf110_defconfig
+          make -j"$(nproc)" O=out plf110_defconfig
           make -j"$(nproc)" O=out olddefconfig
 
           echo "---- config check ----"
           check() {
             grep -q "^CONFIG_${1}=y$" out/.config || { echo "::error::missing CONFIG_${1}"; exit 1; }
           }
+          # 1) 生产配置基线检查：证明用的是原厂 config（不是 Google gki_defconfig）
+          for opt in ARCH_MEDIATEK UFSFEATURE OPLUS_CHARGER MTK_CCCI_DEVICES; do
+            check "$opt"
+          done
+          # 2) 我们的功能检查
           for opt in SYSVIPC POSIX_MQUEUE PID_NS IPC_NS UTS_NS USER_NS DEVTMPFS \
                      MACVLAN TMPFS_XATTR TMPFS_POSIX_ACL NETFILTER_ADVANCED; do
             check "$opt"
@@ -175,6 +185,8 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           cp "$IMG" "$GITHUB_WORKSPACE/artifacts/Image"
           cp "$KDIR/out/.config" "$GITHUB_WORKSPACE/artifacts/kernel.config"
+          cp "$KDIR/out/Module.symvers" "$GITHUB_WORKSPACE/artifacts/Module.symvers" 2>/dev/null || true
+          cp "$KDIR/out/System.map" "$GITHUB_WORKSPACE/artifacts/System.map" 2>/dev/null || true
           cp "$KDIR/build.log" "$GITHUB_WORKSPACE/artifacts/build.log" 2>/dev/null || true
           sha256sum "$GITHUB_WORKSPACE/artifacts/Image" \
             | tee "$GITHUB_WORKSPACE/artifacts/Image.sha256"

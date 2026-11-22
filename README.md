@@ -2,8 +2,11 @@
 
 在 **GitHub Actions 免费云端**编译你手机的内核：
 
-- 源码：`OnePlusOSS/android_kernel_oneplus_mt6989` @ `770ca1ea`（PLF110_16.0.5.701，内核 **6.1.134**）+ 同批次的厂商树 `android_kernel_modules_and_devicetree_oneplus_mt6989` @ `c34cf6fe`（内核树里 `drivers/soc/oplus/*` 等符号链接指向它的 `vendor/oplus/...`，缺了 Kconfig 解析直接失败）
-- 输出：`Image`（ARM64 内核镜像）+ 可刷入的 AnyKernel3 zip
+- 源码：`OnePlusOSS/android_kernel_oneplus_mt6989` @ `700216a4`（PLF110_16.0.0.203，内核 **6.1.134**，与本机 16.0.2.401 固件 2025-12-09 构建日最接近）+ 同一批次的厂商树 `android_kernel_modules_and_devicetree_oneplus_mt6989` @ `ae37b666`（内核树里 `drivers/soc/oplus/*` 等符号链接指向它的 `vendor/oplus/...`，缺了 Kconfig 解析直接失败）
+- **配置基线 = 本机原厂 `/proc/config.gz`**（`config/plf110_stock.config`，由 `adb shell su -c 'zcat /proc/config.gz'` 导出）
+  ⚠️ **不能用 Google 的 `gki_defconfig`**：那是通用最小配置，缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动（`ARCH_MEDIATEK`、`UFSFEATURE`、`OPLUS_CHARGER*`、`MTK_CCCI_DEVICES` 等），编出来会出现 **"第一段 init 挂载失败 → kernel panic: Attempted to kill init" 然后直接重启**（已实测踩坑）
+- LTO 与原厂一致用 **`none`**（原厂 `CONFIG_LTO_NONE=y`），CFI 保持开启
+- 输出：`Image`（ARM64 内核镜像）+ `Module.symvers`（用于核对 vendor 模块 kABI 兼容性）+ 可刷入的 AnyKernel3 zip
 - 已内置：**Droidspaces 内核支持**（kABI 补丁 + SYSVIPC/PID_NS/IPC_NS/USER_NS 等配置）
 - 你的编译产物还可以保留 **FolkPatch** root（刷机流程见文末）
 
