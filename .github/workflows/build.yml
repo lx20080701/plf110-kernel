@@ -86,21 +86,43 @@ jobs:
         run: |
           set -e
           cd "$KDIR"
+          set -a
+          . "$GITHUB_WORKSPACE/config/features.env"
+          set +a
           export PATH="$CLANG_BIN:$PATH"
           export ARCH=arm64 LLVM=1
           make -j"$(nproc)" O=out gki_defconfig
           make -j"$(nproc)" O=out olddefconfig
 
           echo "---- config check ----"
-          for opt in SYSVIPC POSIX_MQUEUE PID_NS IPC_NS USER_NS DEVTMPFS MACVLAN \
-                     IP_SET IP6_NF_NAT TMPFS_XATTR; do
-            grep -q "^CONFIG_${opt}=y$" out/.config \
-              || { echo "::error::missing CONFIG_${opt}"; exit 1; }
+          check() {
+            grep -q "^CONFIG_${1}=y$" out/.config || { echo "::error::missing CONFIG_${1}"; exit 1; }
+          }
+          for opt in SYSVIPC POSIX_MQUEUE PID_NS IPC_NS UTS_NS USER_NS DEVTMPFS \
+                     MACVLAN TMPFS_XATTR TMPFS_POSIX_ACL; do
+            check "$opt"
           done
-          if [ "${{ inputs.debug_info }}" != "true" ] && grep -q '^CONFIG_KASAN=y$' out/.config; then
-            echo "::error::KASAN still enabled"; exit 1
+          if [ "${BBR:-true}" = "true" ]; then check TCP_CONG_BBR; fi
+          if [ "${NETSCHED:-true}" = "true" ]; then check NET_SCH_CAKE; fi
+          if [ "${IPSET:-true}" = "true" ]; then check IP_SET; check IP6_NF_NAT; fi
+          if [ "${NTFS3:-true}" = "true" ]; then check NTFS3_FS; fi
+          if [ "${SQUASHFS:-true}" = "true" ]; then check SQUASHFS; fi
+          if [ "${EXTRA_FS:-false}" = "true" ]; then
+            check ISO9660_FS; check UDF_FS; check CIFS; check NFS_FS
           fi
-          grep -E '^CONFIG_(LTO|CFI|TCP_CONG_BBR|NTFS3_FS|SQUASHFS|NTSYNC|CGROUP_PIDS|CFS_BANDWIDTH)=' \
+          if [ "${CONTAINER_NET:-false}" = "true" ]; then check IPVLAN; fi
+          if [ "${NTSYNC:-false}" = "true" ]; then
+            grep -q '^CONFIG_NTSYNC=y$' out/.config || echo "::warning::NTSync 未生效（补丁未应用全）"
+          fi
+          if [ "${NET_DEFAULTS:-false}" = "true" ]; then
+            grep -q '^CONFIG_DEFAULT_TCP_CONG="bbr"$' out/.config || echo "::warning::默认 bbr 未写入"
+          fi
+          if [ "${{ inputs.debug_info }}" != "true" ]; then
+            if grep -q '^CONFIG_KASAN=y$' out/.config; then
+              echo "::error::KASAN still enabled"; exit 1
+            fi
+          fi
+          grep -E '^CONFIG_(LTO|CFI|TCP_CONG_BBR|NTFS3_FS|SQUASHFS|NTSYNC|CIFS|IPVLAN|CGROUP_PIDS|CFS_BANDWIDTH)=' \
             out/.config || true
 
           make -j"$(nproc)" O=out Image 2>&1 | tee build.log

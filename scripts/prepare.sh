@@ -20,12 +20,14 @@ trap 'rm -rf "$tmp"' EXIT
 
 fetch() { curl -LfsS --retry 3 --connect-timeout 20 -o "$2" "$1"; }
 apply() { say "应用补丁：$1"; patch -p1 --forward --fuzz=3 < "$2"; }
-# 可选补丁：失败只警告，不中断编译
+# 可选补丁：失败只警告，不中断编译；返回 0=成功 / 1=失败
 apply_optional() {
   say "应用可选补丁：$1"
-  if ! patch -p1 --forward --fuzz=3 < "$2"; then
-    echo "::warning::可选补丁未能应用：$1（已跳过）"
+  if patch -p1 --forward --fuzz=3 < "$2"; then
+    return 0
   fi
+  echo "::warning::可选补丁未能应用：$1（已跳过）"
+  return 1
 }
 
 # ------------------------------------------------------------
@@ -41,16 +43,21 @@ apply "OPLUS bsp_midas 空任务修复（kernel/pid.c）" "$tmp/ghost.patch"
 # ------------------------------------------------------------
 # 2. 可选功能补丁
 # ------------------------------------------------------------
+BBRV3_OK=false
+NTSYNC_OK=false
+
 if [ "${BBRV3:-false}" = "true" ]; then
   fetch "$PATCH_RAW/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android14-6.1.patch" "$tmp/bbrv3.patch"
-  apply_optional "BBRv3 backport (android14-6.1)" "$tmp/bbrv3.patch"
+  if apply_optional "BBRv3 backport (android14-6.1)" "$tmp/bbrv3.patch"; then BBRV3_OK=true; fi
 fi
 
 if [ "${NTSYNC:-false}" = "true" ]; then
+  NTSYNC_PARTS=0
   fetch "$PATCH_RAW/common/ntsync/ntsync_compat_android14-6.1.patch" "$tmp/ntsync_compat.patch"
-  apply_optional "NTSync compat (android14-6.1)" "$tmp/ntsync_compat.patch"
+  if apply_optional "NTSync compat (android14-6.1)" "$tmp/ntsync_compat.patch"; then NTSYNC_PARTS=$((NTSYNC_PARTS+1)); fi
   fetch "$PATCH_RAW/common/ntsync/ntsync_base.patch" "$tmp/ntsync_base.patch"
-  apply_optional "NTSync base" "$tmp/ntsync_base.patch"
+  if apply_optional "NTSync base" "$tmp/ntsync_base.patch"; then NTSYNC_PARTS=$((NTSYNC_PARTS+1)); fi
+  if [ "$NTSYNC_PARTS" -eq 2 ]; then NTSYNC_OK=true; fi
 fi
 
 if [ "${UNICODE:-false}" = "true" ]; then
@@ -92,7 +99,7 @@ if [ "${PERF_TWEAKS:-false}" = "true" ]; then
   )
   for p in "${perf_patches[@]}"; do
     fetch "$PATCH_RAW/common/$p.patch" "$tmp/$p.patch"
-    apply_optional "优化补丁 $p" "$tmp/$p.patch"
+    apply_optional "优化补丁 $p" "$tmp/$p.patch" || true
   done
 fi
 
@@ -132,10 +139,19 @@ CONFIG_TCP_CONG_BBR=y
 EOF
 fi
 
-if [ "${BBRV3:-false}" = "true" ]; then
+if [ "${BBRV3_OK:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 CONFIG_TCP_CONG_ADVANCED=y
 CONFIG_TCP_CONG_BBR3=y
+EOF
+fi
+
+# --- NTSync（补丁成功才开配置） ---
+if [ "${NTSYNC_OK:-false}" = "true" ]; then
+cat >> "$cfg" <<'EOF'
+
+# ==== NTSync（Wine / Windows 游戏）====
+CONFIG_NTSYNC=y
 EOF
 fi
 
