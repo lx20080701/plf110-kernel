@@ -156,3 +156,58 @@ fastboot reboot
 ```
 
 > 本机 `fastboot boot`（临时启动）不支持，只能 flash；解锁状态下校验已关闭，原厂镜像可直接刷。
+
+---
+
+## 九、v2（run13, 2026-11-23）实机验证记录
+
+### 9.1 构建参数
+
+| 项 | 值 |
+|---|---|
+| commit | `9d2fb6767847c6d180a2c64629c77fce02ee597c`（run13） |
+| worklfow 输入 | `lto=none`、`debug_info=true` |
+| kernel | `6.1.134-g9d2fb6767847 #1 SMP PREEMPT Mon Nov 23 13:40:42 UTC 2026` |
+| `Image` | 36,387,328 B，sha256 `2c3cabcf146f455742e39d2463090276b6b5ac67a189c6e4ecae61f056da6583` |
+
+### 9.2 与 run11（v1）配置逐项比对
+
+- 新增开启：`CFS_BANDWIDTH`、`CGROUP_PIDS`、`NTSYNC`、`IP_SET`（全部类型）、`NETFILTER_XT_MATCH_ADDRTYPE`、`NETFILTER_XT_SET`、`IP6_NF_NAT`、`IP6_NF_TARGET_MASQUERADE`
+- **没有任何被关闭项**；`KASAN / KASAN_HW_TAGS / UBSAN / KFENCE / PAGE_OWNER / PANIC_ON_OOPS / MODVERSIONS / DEBUG_INFO_BTF / KUNIT` 全部与 run11 一致
+
+### 9.3 运行验证
+
+| 项目 | 结果 |
+|---|---|
+| 启动 | `boot_completed=1`，无 panic / BUG / Oops |
+| 原厂模块 | `lsmod` = 599 / 600（2 个 OPLUS scx 模块仍因公开源码缺 HMBIRD 而无法加载） |
+| 模块错误 | dmesg `Unknown symbol` 仅 8 条，全部是 `oplus_bsp_game_opt` 的 4 个 scx tracepoint（已知，无外设影响） |
+| `/dev/ntsync` | `crw------- root root 10,125` ✅ |
+| cgroup 控制器 | `/sys/fs/cgroup/cgroup.controllers` 含 `pids` ✅ |
+| `droidspaces check` | **全部 ✓**：IPv6 NAT / CPU limit / Process limit 三项由 ✗ 变 ✓ |
+| 容器限额 | `--cpus 2 --pids-limit 200` → `cpu_quota=200000 / period=100000 / pids_limit=200`；容器内 `pids.max=200` ✅ |
+| NTsync | 静态测试程序在**容器内**和**宿主 root** 均 `NTSYNC_TEST_PASS`（CREATE_SEM / SEM_RELEASE / SEM_READ count=2 / EVENT set+read） ✅ |
+| IPv6 NAT | `ip6tables -t nat -L -n` 正常 ✅ |
+| 容器 | 恢复默认配置后正常运行：Azure Linux 3.0，`systemctl is-system-running` = running，IP `172.28.186.11` |
+
+### 9.4 v2 产物哈希
+
+| 资产 | 大小 | sha256 |
+|---|---|---|
+| `folk_patched_115404_0.13.9_hfxt.img` | 67,108,864 | `1d44445a598ed6a162399d526bbede90b96f4225ddf50618c164559632f7e0b1` |
+| `boot_run13_6.1.134.img` | 67,108,864 | `4db24326d9a8d47fc8351e94e3490126beb5dd5c0e4f1e8ce0f2dcc0d85d49bd` |
+| `Image` | 36,387,328 | `2c3cabcf146f455742e39d2463090276b6b5ac67a189c6e4ecae61f056da6583` |
+| `System.map` | 5,010,316 | `bc3a0e601944c0991bebc336493c7d5eff05920fc8686ab409ad64fda9987621` |
+| `kernel.config` | 212,221 | `58945c88000987d1d05a359fd8d213ad6e4b6d473341f042f6ae286895ca5333` |
+
+FolkPatch 打补丁后镜像校验：与 `Image` 逐页比对仅 45 字节不同（4 个页），尾部 payload 432,480 字节，含 `KP1158/folk/KPM/ksu` 标记；FolkPatch 自动把 vbmeta 后移到 17,387,520，AVB0/footer 正常。
+
+### 9.5 run12 失败复盘（`debug_info=false` → 白屏）
+
+- run13 之前用 `debug_info=false` 构建了 run12（build 时间 `Mon Nov 23 12:56:14 UTC 2026`），刷入后白屏。
+- pstore `console-ramoops-0` 显示：0.325s 时 `monitor_hang: Unknown symbol kasan_flag_enabled (err -2)`，
+  随后 PID 1 init 以 127 退出 → `Kernel panic - not syncing: Attempted to kill init! exitcode=0x00007f00`。
+- 原因：`debug_info=false` 关闭 KASAN，而 `kasan_flag_enabled` 只有 `CONFIG_KASAN_HW_TAGS=y` 才导出，
+  原厂 22 个模块（monitor_hang / mali / wlan 等）依赖它 → 第一段 init 装模块失败。
+- 结论：**本机必须 `debug_info=true`**；性能瘦身版需要额外补 `kasan_flag_enabled` 导出桩（后续）。
+- 已回滚到 run11 镜像救机，再刷入 run13 通过。

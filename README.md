@@ -1,54 +1,61 @@
-# PLF110（一加 Ace 5 竞速版）自编内核 + Droidspaces
+# PLF110（一加 Ace 5 竞速版）自编内核 + Droidspaces + NTsync
 
-> **状态：✅ 已实机验证可用（2026-11-23）**
-> 自编内核 `6.1.134-g04555ae11869` 在本机成功启动（`boot_completed=1`），root、外设全部正常，
-> **Droidspaces 容器（systemd / Azure Linux 3.0）已跑起来**，NAT 网络 + DNS 正常。
+> **状态：✅ v2 已实机验证可用（2026-11-23）**
+> 自编内核 `6.1.134-g9d2fb6767847` 在本机成功启动（`boot_completed=1`），root、外设正常，
+> Droidspaces 容器跑通，并且新增：**NTsync（Wine/Windows 程序）**、**容器 CPU/PID 限额**、
+> **IPv6 NAT**、**CVE-2026-43499 修复**。
 
 | 项目 | 结果 |
 |---|---|
 | 设备 | OnePlus PLF110 / MT6989 / Android 16（固件 16.0.2.401） |
-| 内核 | `6.1.134-g04555ae11869`（CFI 开、LTO=none、KASAN_HW_TAGS，与原厂 ABI 对齐） |
-| 内核模块 | 598 / 600 原厂模块加载成功（缺 2 个 OPLUS scx 性能调度模块，无外设影响） |
+| 内核 | `6.1.134-g9d2fb6767847`（CFI 开、LTO=none、KASAN_HW_TAGS，与原厂 ABI 对齐） |
+| 内核模块 | 599 / 600 原厂模块加载成功（缺 2 个 OPLUS scx 性能调度模块，无外设影响） |
 | root | FolkPatch 0.13.9（`su -c id` → `uid=0(root)`） |
-| 外设 | 显示/触摸/按键/指纹/传感器(40)/WiFi/蓝牙/相机/音频/充电/USB/马达 全部验证通过 |
-| 容器 | Droidspaces v7.2.0，`systemctl is-system-running` = **running**，容器 IP `172.28.186.11`，外网/DNS 通 |
-| 启动耗时 | 开机到 `sys.boot_completed=1` 约 **22.8 秒** |
+| 容器 | Droidspaces v7.2.0，`systemctl is-system-running` = **running**，IP `172.28.186.11`，外网/DNS 通 |
+| 新增能力 | ✅ NTsync（`/dev/ntsync`，实测 ioctl PASS）｜✅ `--cpus` / `--pids-limit` 生效｜✅ IPv6 NAT｜✅ CVE 修复 |
+| `droidspaces check` | **全绿**（含 IPv6 NAT / CPU limit / Process limit 三项，v1 时是 ✗） |
+| 启动耗时 | 开机到 `sys.boot_completed=1` 约 **22~30 秒** |
 
 - 📄 完整技术记录（构建参数 / kABI 处理 / 符号完备性证明 / 实机验证 / 回滚）：**[docs/VERIFIED_BUILD.md](docs/VERIFIED_BUILD.md)**
 - 📋 运行日志分析（开机→37 分钟：警告/崩溃/模块状态）：**[docs/RUNTIME_LOG_REPORT.md](docs/RUNTIME_LOG_REPORT.md)**
 - 🧪 验证工具与基线数据：**[verify/](verify/)**
-- 📦 全部成品镜像：**[Releases › `plf110-6.1.134-droidspaces-v1`](../../releases/tag/plf110-6.1.134-droidspaces-v1)**
+- 📦 全部成品镜像：**[Releases › `plf110-6.1.134-droidspaces-v2`](../../releases/tag/plf110-6.1.134-droidspaces-v2)**
+  （原厂回滚镜像在 [v1](../../releases/tag/plf110-6.1.134-droidspaces-v1)）
 
 ---
 
 ## 一、直接下载使用（不自己编译）
 
-Release 里一共有 9 个文件：
+v2 Release 里有 5 个文件（原厂回滚镜像在 v1 Release）：
 
-| 资产 | 内容 | 大小 | sha256（前 16 位） |
+| 资产 | 内容 | 大小 | sha256 |
 |---|---|---|---|
-| `boot_run11_6.1.134.img` | **自编内核 + 原厂纯净 ramdisk**（无 root） | 64 MB | `c152ed9bfc5d1545…` |
-| `folk_patched_115404_0.13.9_tklj.img` | **自编内核 + FolkPatch root**（推荐直接用） | 64 MB | `e5ef715770342ecc…` |
-| `Image` | ARM64 内核镜像（打 boot 用） | 34.2 MB | `4fb42c92d0e3eca3…` |
-| `System.map` | 符号表（调试/定位用） | 4.7 MB | `e6a278f3a7cc5f85…` |
-| `kernel.config` | 最终内核配置 | 211 KB | `801c6b06217b36cf…` |
-| `missing_symbols_run11.txt` | 相对原厂模块的符号缺口（22 个） | 716 B | — |
-| `stock_boot_original.img` | **完整原厂 boot**（内核 `6.1.134-android14-11-o-g8f3b9b4f58d8`，零改动） | 64 MB | `16b0b00eb63ef046…` |
-| `stock_boot_folkpatch_root.img` | **原厂内核 + FolkPatch root**（最稳救砖镜像） | 64 MB | `224794ed8a2d3aab…` |
-| `stock_init_boot_original.img` | **原厂 init_boot**（完整回滚用） | 8 MB | `917dacdf28781f59…` |
+| `folk_patched_115404_0.13.9_hfxt.img` | **自编内核 + FolkPatch root**（推荐直接用） | 64 MB | `1d44445a598ed6a162399d526bbede90b96f4225ddf50618c164559632f7e0b1` |
+| `boot_run13_6.1.134.img` | 自编内核 + 原厂纯净 ramdisk（无 root） | 64 MB | `4db24326d9a8d47fc8351e94e3490126beb5dd5c0e4f1e8ce0f2dcc0d85d49bd` |
+| `Image` | ARM64 内核镜像（打 boot 用） | 34.7 MB | `2c3cabcf146f455742e39d2463090276b6b5ac67a189c6e4ecae61f056da6583` |
+| `System.map` | 符号表（调试/定位用） | 4.8 MB | `bc3a0e601944c0991bebc336493c7d5eff05920fc8686ab409ad64fda9987621` |
+| `kernel.config` | 最终内核配置 | 207 KB | `58945c88000987d1d05a359fd8d213ad6e4b6d473341f042f6ae286895ca5333` |
 
-> 完整 sha256 见 Release 页面（GitHub 会显示每个资产的 digest），或 `docs/VERIFIED_BUILD.md` 第六节。
+v1 Release 里的原厂回滚镜像（刷机前建议下载放着）：
+
+| 资产 | 内容 | sha256（前 16 位） |
+|---|---|---|
+| `stock_boot_original.img` | **完整原厂 boot**（零改动） | `16b0b00eb63ef046…` |
+| `stock_boot_folkpatch_root.img` | **原厂内核 + FolkPatch root**（最稳救砖镜像） | `224794ed8a2d3aab…` |
+| `stock_init_boot_original.img` | 原厂 init_boot（完整回滚用） | `917dacdf28781f59…` |
+
+> 完整 sha256 见 Release 页面，或 `docs/VERIFIED_BUILD.md`。
 
 ### 刷入
 
 ```bash
 adb reboot bootloader
 
-# 自编内核（无 root）
-fastboot flash boot boot_run11_6.1.134.img
+# 推荐：自编内核 + root（NTsync / 容器限额全都有）
+fastboot flash boot folk_patched_115404_0.13.9_hfxt.img
 
-# 或者：自编内核 + root（推荐）
-fastboot flash boot folk_patched_115404_0.13.9_tklj.img
+# 或自编内核（无 root）
+# fastboot flash boot boot_run13_6.1.134.img
 
 fastboot reboot
 ```
@@ -56,9 +63,11 @@ fastboot reboot
 刷完验证：
 
 ```bash
-adb shell uname -r                  # 应显示 6.1.134-g04555ae11869
+adb shell uname -r                  # 应显示 6.1.134-g9d2fb6767847
 adb shell getprop sys.boot_completed # 1
 adb shell 'su -c id'                # 有 root 版应返回 uid=0(root)
+adb shell 'su -c "ls -l /dev/ntsync"'                    # crw------- root root 10,125
+adb shell 'su -c "/data/local/Droidspaces/bin/droidspaces check"'   # 全绿
 ```
 
 ### 回滚
@@ -98,7 +107,9 @@ fastboot reboot
 | `lto` | `none`（默认，与原厂一致）；`thin` 为实验项，很慢，不建议 |
 | `debug_info` | `false` = 精简构建；**`true` = 与原厂配置完全一致（KASAN_HW_TAGS/BTF/UBSAN 全开）——想兼容原厂 vendor 模块必须用 true** |
 
-> 历史教训：`debug_info=true` 曾被 `config/features.env` 里的同名变量反向覆盖（run10 白编 16 分钟），现在 workflow 里有闸门：`features.env` 出现 `DEBUG_INFO/KABI_BYPASS/LTO_MODE` 会直接失败。
+> 历史教训：
+> - `debug_info=true` 曾被 `config/features.env` 里的同名变量反向覆盖（run10 白编 16 分钟），现在 workflow 里有闸门：`features.env` 出现 `DEBUG_INFO/LTO_MODE` 会直接失败。
+> - **run12 用了 `debug_info=false` 直接白屏**：KASAN 一关，原厂 `monitor_hang.ko` 就缺 `kasan_flag_enabled` 符号 → init 0.32 秒 `Attempted to kill init` panic。**本机必须用 `debug_info=true`**（run13 已验证）。
 
 ### 2.3 产物
 
@@ -145,6 +156,21 @@ fastboot reboot
 - LTO 与原厂一致用 `none`，CFI 保持开启
 - Droidspaces 必需配置：`SYSVIPC`、`POSIX_MQUEUE`、`PID_NS`、`IPC_NS`、`USER_NS`、`UTS_NS`、`NET_NS`、`CGROUPS/MEMCG/CGROUP_FREEZER`、`SECCOMP(_FILTER)`、`OVERLAY_FS`、`TMPFS(_XATTR/_POSIX_ACL)`、`DEVTMPFS`、`VETH`、`BRIDGE`、`MACVLAN` 等（见 `scripts/prepare.sh`）
 
+### 6. 第二批补丁：NTsync / 容器限额 / CVE / IPv6 NAT（v2 新增）
+
+补丁来源 [Goldzxcbug/Droidspaces_Kernel_patch](https://github.com/Goldzxcbug/Droidspaces_Kernel_patch) @ `dc0f76b`，
+已 vendored 到 `patches/ds_*.patch`（该仓库测试机型表没有 PLF110/MT6989/16.0.3.500，本项目做了适配与实机验证）：
+
+| 补丁 | 作用 | 验证 |
+|---|---|---|
+| `ds_ntsync_base.patch` + `ds_ntsync_compat_android14-6.1.patch` | NT 同步原语（`drivers/misc/ntsync.c`，`/dev/ntsync`） | 容器内/宿主均通过 CREATE_SEM/RELEASE/READ/EVENT ioctl |
+| `ds_cgroup_limits_6.1.patch` | 在 KMI 冻结内核上安全打开 `CGROUP_PIDS` + `CFS_BANDWIDTH`（ABI 可见数组保持原边界） | `--cpus 2 --pids-limit 200` 生效，`droidspaces check` 两项 ✗→✓ |
+| `ds_cve_userns_rtmutex_6.1.patch` | CVE-2026-43499 user-ns rtmutex 提权修复 | 已打上（`rtmutex.c` 含 `waiter_task`） |
+| 配置开关 | `CONFIG_IP_SET*` / `IP6_NF_NAT` / `IP6_NF_TARGET_MASQUERADE` | `ip6tables -t nat` 可用，check ✗→✓ |
+
+`scripts/prepare.sh` 里每个补丁都**先 `patch --dry-run` 全量校验再应用**，失败立即中断构建，避免半套改动。
+本地对 6.1.134 源码逐一 dry-run 验证：上下文全部命中，只有行号偏移、无 fuzz 失败。
+
 ---
 
 ## 四、目录结构
@@ -157,9 +183,15 @@ config/
 scripts/prepare.sh            # 打补丁 + 生成 defconfig + 符号断言
 patches/
   kabi_bypass.patch           # 跳过 genksyms CRC 校验（只警告不拒绝）
+  ds_ntsync_base.patch        # NTsync 驱动（Wine/Windows）
+  ds_ntsync_compat_android14-6.1.patch
+  ds_cgroup_limits_6.1.patch  # CGROUP_PIDS + CFS_BANDWIDTH（KMI 兼容）
+  ds_cve_userns_rtmutex_6.1.patch
+  README.md                   # 补丁来源/固定提交/sha256
 docs/
-  VERIFIED_BUILD.md           # 已验证版本的完整技术记录
-  RELEASE_NOTES_v1.md         # Release 正文
+  VERIFIED_BUILD.md           # 已验证版本的完整技术记录（含 v2 run13）
+  RELEASE_NOTES_v1.md         # v1 Release 正文
+  RELEASE_NOTES_v2.md         # v2 Release 正文
 verify/                       # 符号完备性 / boot 镜像校验 / 厂商模块基线
 ```
 
@@ -170,7 +202,8 @@ verify/                       # 符号完备性 / boot 镜像校验 / 厂商模�
 编辑 `config/features.env`，把对应项改成 `true` / `false`，提交后重新 Run workflow：
 
 - `DROIDSPACES=true` —— 容器必需（默认开）
-- 其余默认 `false`：`BBR` / `BBRv3` / `NET_SCHED` / `IP_SET_NAT` / `TTL_TARGET` / `SDP_CHARGE` / `NTSYNC` / `NTFS3` / `SQUASHFS` / `UNICODE_FIX` / `PERF_TWEAKS` / `EXTRA_FS` / `CONTAINER_NET` / `NET_DEFAULTS`
+- v2 默认开启：`NTSYNC`（Wine/Windows）、`CGROUP_LIMITS`（容器 CPU/PID 限额）、`USERNS_CVE`（CVE 修复）、`IP_SET_NAT`（IPv6 NAT）
+- 其余默认 `false`：`BBR` / `BBRv3` / `NET_SCHED` / `TTL_TARGET` / `SDP_CHARGE` / `NTFS3` / `SQUASHFS` / `UNICODE_FIX` / `PERF_TWEAKS` / `EXTRA_FS` / `CONTAINER_NET` / `NET_DEFAULTS`
 
 **关闭 ≠ 删除**：`prepare.sh` 会把每个关闭项写成 `# CONFIG_XXX is not set` 占位留在 defconfig 里，随时可改回。
 ⚠️ `Image` 是直接跑在 boot 分区的内核，**所有功能必须内置（`=y`）**，脚本已按此处理。
@@ -182,7 +215,10 @@ verify/                       # 符号完备性 / boot 镜像校验 / 厂商模�
 1. **2 个 OPLUS scx 调度模块未加载**：`oplus_bsp_game_opt`（缺 4 个 `__tracepoint_android_vh_scx_*` 符号 → 加载失败）、`oplus_bsp_sched_ext`（依赖前者，未尝试）。公开内核源码没有 HMBIRD/scx 这部分（`CONFIG_HMBIRD_SCHED` 在各公开版本 Kconfig 中均不存在）。影响：OPLUS 游戏/性能调度不生效，原生调度与容器不受影响。
 2. **`/data` 上无法挂载 overlayfs**：该 f2fs 实例（dm-77，带 inlinecrypt/compress/casefold 特性）的 dentry 被 overlayfs 判为 unsupported；`/metadata`(f2fs)、ext4、tmpfs 正常。原厂同样限制，Droidspaces 用 loop ext4 镜像作容器根文件系统，不受影响。
 3. `SELinux = Permissive`（由 FolkPatch 设置，对容器有利）。
-4. 本版本为对齐原厂 ABI 保留 KASAN/UBSAN，**未做性能瘦身**；瘦身版需要补 `kasan_flag_enabled` 等导出桩（后续可做）。
+4. 本版本为对齐原厂 ABI **保留原厂调试配置**（KASAN_HW_TAGS / UBSAN / KFENCE / PAGE_OWNER / PANIC_ON_OOPS），**未做性能瘦身**。
+   实测：`debug_info=false`（关 KASAN）会直接白屏（原厂 `monitor_hang.ko` 缺 `kasan_flag_enabled` → init panic）。
+   瘦身版需要先补 `kasan_flag_enabled` 导出桩，属于后续可做项。
+5. **构建参数**：本机必须 `debug_info=true`（run13 验证）；run12 误用 false 导致白屏，日志已归档在 `docs/VERIFIED_BUILD.md`。
 
 ---
 
