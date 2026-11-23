@@ -7,6 +7,8 @@
   ⚠️ **不能用 Google 的 `gki_defconfig`**：那是通用最小配置，缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动（`ARCH_MEDIATEK`、`OPLUS_CHARGER*`、`MTK_CCCI_DEVICES` 等），编出来会出现 **"第一段 init 挂载失败 → kernel panic: Attempted to kill init" 然后直接重启**（已实测踩坑）
   ℹ️ 原厂 config 里混有一批**只存在于厂商 modules 树**的符号（`UFSFEATURE`、`UFSTW`、`DEVICE_MODULES_*` 等，原厂 build 脚本后补进 `.config` 的装饰行）；GKI 树里没有这些 Kconfig 符号，kconfig 会**静默丢弃**（只有设 `KCONFIG_WARN_UNKNOWN_SYMBOLS` 才报）。所以基线断言只能挑真正的 GKI 符号（如 `ARCH_MEDIATEK`），不能拿 `UFSFEATURE` 断言——上一轮 run3 就死在这上面。
 - LTO 与原厂一致用 **`none`**（原厂 `CONFIG_LTO_NONE=y`），CFI 保持开启
+- 构建修正：原厂 config 的 `CONFIG_MODULE_SIG_KEY="$(DEVICE_MODULES_REL_DIR)/certs/mtk_signing_key.pem"` 在 OSS 编译时 `$(DEVICE_MODULES_REL_DIR)` 展开为空 → 变成 `/certs/mtk_signing_key.pem`，make 直接失败（run4 的坑）。`prepare.sh` 已覆盖为内核默认 `certs/signing_key.pem`（构建时自动生成一次性密钥；`MODULE_SIG_FORCE` 原厂就是 `n`，不影响加载原厂 vendor 模块）
+- ✅ **run #5 已完整编译成功**（`lto=none`、`debug_info=false`，约 12 分钟），产物见 Actions 的 `kernel-PLF110-A16-6.1.134-5`
 - 输出：`Image`（ARM64 内核镜像）+ `Module.symvers`（用于核对 vendor 模块 kABI 兼容性）+ 可刷入的 AnyKernel3 zip
 - 已内置：**Droidspaces 内核支持**（kABI 补丁 + SYSVIPC/PID_NS/IPC_NS/USER_NS 等配置）
 - 你的编译产物还可以保留 **FolkPatch** root（刷机流程见文末）
