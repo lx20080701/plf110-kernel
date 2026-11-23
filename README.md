@@ -6,6 +6,10 @@
 - **配置基线 = 本机原厂 `/proc/config.gz`**（`config/plf110_stock.config`，由 `adb shell su -c 'zcat /proc/config.gz'` 导出）
   ⚠️ **不能用 Google 的 `gki_defconfig`**：那是通用最小配置，缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动（`ARCH_MEDIATEK`、`OPLUS_CHARGER*`、`MTK_CCCI_DEVICES` 等），编出来会出现 **"第一段 init 挂载失败 → kernel panic: Attempted to kill init" 然后直接重启**（已实测踩坑）
   ℹ️ 原厂 config 里混有一批**只存在于厂商 modules 树**的符号（`UFSFEATURE`、`UFSTW`、`DEVICE_MODULES_*` 等，原厂 build 脚本后补进 `.config` 的装饰行）；GKI 树里没有这些 Kconfig 符号，kconfig 会**静默丢弃**（只有设 `KCONFIG_WARN_UNKNOWN_SYMBOLS` 才报）。所以基线断言只能挑真正的 GKI 符号（如 `ARCH_MEDIATEK`），不能拿 `UFSFEATURE` 断言——上一轮 run3 就死在这上面。
+- 🔴 **kABI 红线（run5 的血的教训）**：`CONFIG_DEBUG_INFO` / `DEBUG_INFO_DWARF4` / `DEBUG_INFO_BTF` / `DEBUG_INFO_BTF_MODULES` / `KUNIT` **必须保持原厂的 `=y`**。
+  `struct module` 里有两段 `#ifdef`（`CONFIG_DEBUG_INFO_BTF_MODULES` → `btf_data*`、`CONFIG_KUNIT` → `kunit_suites*`），改了它们 layout 就变；而导出符号 `module_layout` 的 CRC 是 genksyms 按该函数签名（`struct module *` 等）算的、**包含 struct module 完整定义** → CRC 变 → 原厂 vendor 模块全部报
+  `disagrees about version of symbol module_layout` / `Exec format error` → 第一段 init 加载不了模块 → 机器无提示直接重启。
+  所以 `prepare.sh` 只关**与导出 CRC 无关**的调试项（KASAN/KFENCE/UBSAN/PAGE_OWNER/PANIC_ON_OOPS），并把上面 5 个 ABI 符号显式钉成 `=y`，workflow 里也有硬断言。
 - LTO 与原厂一致用 **`none`**（原厂 `CONFIG_LTO_NONE=y`），CFI 保持开启
 - 构建修正：原厂 config 的 `CONFIG_MODULE_SIG_KEY="$(DEVICE_MODULES_REL_DIR)/certs/mtk_signing_key.pem"` 在 OSS 编译时 `$(DEVICE_MODULES_REL_DIR)` 展开为空 → 变成 `/certs/mtk_signing_key.pem`，make 直接失败（run4 的坑）。`prepare.sh` 已覆盖为内核默认 `certs/signing_key.pem`（构建时自动生成一次性密钥；`MODULE_SIG_FORCE` 原厂就是 `n`，不影响加载原厂 vendor 模块）
 - ✅ **run #5 已完整编译成功**（`lto=none`、`debug_info=false`，约 12 分钟），产物见 Actions 的 `kernel-PLF110-A16-6.1.134-5`

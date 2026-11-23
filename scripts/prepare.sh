@@ -405,23 +405,37 @@ EOF
 esac
 
 # ------------------------------------------------------------
-# 5. 调试选项（本次不动：DEBUG_INFO=false 时关闭 KASAN/KFENCE/UBSAN/BTF…）
+# 5. 调试选项
+#    !! ABI 红线：KUNIT / DEBUG_INFO_BTF / DEBUG_INFO_BTF_MODULES / DEBUG_INFO
+#       这四个会改变 struct module 的字段布局（include/linux/module.h 里的 #ifdef），
+#       而导出符号 module_layout 的 CRC 是 genksyms 按"函数签名用到的类型"算的，
+#       包含 struct module 完整定义 → 一旦改掉，原厂 vendor 模块全部报
+#         "disagrees about version of symbol module_layout" → Exec format error
+#       → 第一段 init 加载不了模块 → 开不了机（run5 实测踩坑，pstore 有日志）。
+#       所以这里只关「不影响 struct module / 导出 CRC」的调试项，
+#       并且显式把 ABI 相关的四项钉在原厂的 y。
 # ------------------------------------------------------------
-if [ "${DEBUG_INFO:-false}" != "true" ]; then
-  say "关闭调试选项（KASAN/KFENCE/UBSAN/PAGE_OWNER/PANIC_ON_OOPS/DEBUG_INFO/BTF/KUNIT）"
 cat >> "$cfg" <<'EOF'
 
-# ==== Production debug off ====
-CONFIG_DEBUG_INFO_NONE=y
-# CONFIG_DEBUG_INFO_DWARF4 is not set
-# CONFIG_DEBUG_INFO_BTF is not set
+# ==== kABI 红线（必须与原厂一致，否则 vendor 模块加载失败）====
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_DWARF4=y
+# CONFIG_DEBUG_INFO_NONE is not set
+CONFIG_DEBUG_INFO_BTF=y
+CONFIG_DEBUG_INFO_BTF_MODULES=y
+CONFIG_KUNIT=y
+EOF
+
+if [ "${DEBUG_INFO:-false}" != "true" ]; then
+  say "关闭不影响 kABI 的调试选项（KASAN/KFENCE/UBSAN/PAGE_OWNER/PANIC_ON_OOPS）"
+cat >> "$cfg" <<'EOF'
+
+# ==== Production debug off（只关不影响导出 CRC 的项）====
 # CONFIG_KASAN is not set
 # CONFIG_KFENCE is not set
 # CONFIG_UBSAN is not set
 # CONFIG_PAGE_OWNER is not set
 # CONFIG_PANIC_ON_OOPS is not set
-# CONFIG_KUNIT is not set
-# CONFIG_KUNIT_DEBUGFS is not set
 CONFIG_FRAME_WARN=0
 EOF
 fi

@@ -55,7 +55,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential bc bison flex libssl-dev libelf-dev \
+            build-essential bc bison flex libssl-dev libelf-dev dwarves \
             lz4 zstd cpio kmod rsync zip unzip python3 git curl aria2 dos2unix ca-certificates
 
       - name: Fetch clang r487747c
@@ -163,6 +163,15 @@ jobs:
             check "$opt"
           done
 
+          # 2.5) kABI 红线（run5 就是死在这四项上）：
+          #      struct module 里 DEBUG_INFO_BTF_MODULES / KUNIT 两段 #ifdef 会改变字段布局，
+          #      导出符号 module_layout 的 CRC 是按 struct module 完整定义算的 →
+          #      改了以后原厂 vendor 模块全部报 "disagrees about version of symbol module_layout"
+          #      然后 Exec format error，第一段 init 加不上模块，机器直接重启。
+          for opt in DEBUG_INFO DEBUG_INFO_DWARF4 DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES KUNIT; do
+            check "$opt"
+          done
+
           # 3) 容器 20 项里的其余符号：只报告，不中断
           { echo "---- 容器必需符号（本次构建 out/.config 实测）----"
             for opt in NAMESPACES NET_NS CGROUPS MEMCG CGROUP_FREEZER CGROUP_DEVICE \
@@ -242,9 +251,10 @@ jobs:
           ls -lh artifacts/
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ env.NAME }}-${{ github.run_number }}
           path: artifacts/**
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
