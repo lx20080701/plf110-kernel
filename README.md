@@ -21,6 +21,8 @@
 - 🧪 验证工具与基线数据：**[verify/](verify/)**
 - 📦 全部成品镜像：**[Releases › `plf110-6.1.134-droidspaces-v2`](../../releases/tag/plf110-6.1.134-droidspaces-v2)**
   （原厂回滚镜像在 [v1](../../releases/tag/plf110-6.1.134-droidspaces-v1)）
+- 🥚 **内核日记：两天从白屏到 NTsync 的草生长征** → **[docs/DIARY.md](docs/DIARY.md)**
+  （不想看技术、只想看乐子的话，从这里开始：白屏三连、pstore 尸检、与 PID 1 斗智斗勇、USB 的三种状态）
 
 ---
 
