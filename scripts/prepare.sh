@@ -21,6 +21,7 @@ set -euo pipefail
 cd "$KDIR"
 
 say() { printf '\n===== %s =====\n' "$*"; }
+say "生效开关：DROIDSPACES=${DROIDSPACES:-true} KABI_BYPASS=${KABI_BYPASS:-true} DEBUG_INFO=${DEBUG_INFO:-false} LTO_MODE=${LTO_MODE:-none}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
