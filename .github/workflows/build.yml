@@ -116,6 +116,13 @@ jobs:
           STOCK_CONFIG: ${{ github.workspace }}/config/plf110_stock.config
         run: |
           set -e
+          # features.env 与 workflow 输入共享键名时，后 source 的会覆盖 workflow 传的值
+          # （run10 就是 DEBUG_INFO=true 被 features.env 里的 false 吃掉，白编 16 分钟）。
+          # 这里加闸门：features.env 出现 workflow 拥有的键 → 立即失败。
+          if grep -nE '^(DEBUG_INFO|KABI_BYPASS|LTO_MODE)=' config/features.env; then
+            echo "::error::config/features.env 含 workflow 拥有的键，会反向覆盖输入"
+            exit 1
+          fi
           set -a
           . config/features.env
           set +a
@@ -157,6 +164,24 @@ jobs:
           #        所以不能拿它们当断言 —— 上一轮 run3 就是死在 check UFSFEATURE 上。
           #        ARCH_MEDIATEK 才是货真价实、且原厂 =y 的 GKI 符号。
           check ARCH_MEDIATEK
+
+          # 1.5) 原厂模块符号依赖的"立即失败"断言（run9 的教训：编完 20 分钟才发现白编）
+          #      这批符号不是我们想要的调试功能，而是原厂 vendor 模块 insmod 时要解析的：
+          #      kasan_flag_enabled 由 monitor_hang / mali / wlan 等 22 个模块引用，
+          #      且只有 CONFIG_KASAN_HW_TAGS=y（运行时可开关的硬件标签模式）才会导出该符号，
+          #      光 CONFIG_KASAN=y 不够。所以 debug_info=true 时必须逐项断言。
+          if [ "${{ inputs.debug_info }}" = "true" ]; then
+            for opt in KASAN KASAN_HW_TAGS UBSAN MODVERSIONS DEBUG_INFO_BTF DEBUG_INFO_BTF_MODULES KUNIT ARM64_MTE; do
+              check "$opt"
+            done
+            for opt in UBSAN_BOUNDS UBSAN_LOCAL_BOUNDS; do
+              report "$opt"
+            done
+            if grep -q '^CONFIG_MODULE_SIG_FORCE=y' out/.config; then
+              echo "::error::CONFIG_MODULE_SIG_FORCE=y（签名强制会拒绝原厂模块）"; exit 1
+            fi
+            echo "---- 模块可见符号自检（Module.symvers 在 modpost 之后才生成，这里先查 .config）----"
+          fi
 
           # 2) Droidspaces 必需项（我们自己写进 defconfig 的，必须生效）
           for opt in SYSVIPC POSIX_MQUEUE IPC_NS UTS_NS PID_NS DEVTMPFS USER_NS \
@@ -234,6 +259,20 @@ jobs:
           cp "$KDIR/out/Module.symvers" "$GITHUB_WORKSPACE/artifacts/Module.symvers" 2>/dev/null || true
           cp "$KDIR/out/System.map" "$GITHUB_WORKSPACE/artifacts/System.map" 2>/dev/null || true
           cp "$KDIR/build.log" "$GITHUB_WORKSPACE/artifacts/build.log" 2>/dev/null || true
+
+          # 模块可见符号自检：System.map 只证明符号存在，Module.symvers 才证明"对模块导出"
+          if [ "${{ inputs.debug_info }}" = "true" ]; then
+            SYMV="$GITHUB_WORKSPACE/artifacts/Module.symvers"
+            [ -f "$SYMV" ] || { echo "::error::Module.symvers 缺失，无法证明模块可见性"; exit 1; }
+            for s in kasan_flag_enabled __ubsan_handle_out_of_bounds __ubsan_handle_type_mismatch; do
+              if grep -qwE "^0x[0-9a-fA-F]+[[:space:]]+${s}[[:space:]]" "$SYMV"; then
+                echo "OK export $s"
+              else
+                echo "::error::Module.symvers 里没有 $s（原厂模块会 Unknown symbol）"; exit 1
+              fi
+            done
+          fi
+
           sha256sum "$GITHUB_WORKSPACE/artifacts/Image" \
             | tee "$GITHUB_WORKSPACE/artifacts/Image.sha256"
 
