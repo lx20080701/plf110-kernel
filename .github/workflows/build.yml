@@ -261,16 +261,38 @@ jobs:
           cp "$KDIR/build.log" "$GITHUB_WORKSPACE/artifacts/build.log" 2>/dev/null || true
 
           # 模块可见符号自检：System.map 只证明符号存在，Module.symvers 才证明"对模块导出"
+          # 判据来源（用 600 个原厂已加载模块做 UND 全集反推）：
+          #   强制项 -> kasan_flag_enabled（monitor_hang/mali/wlan 等 22 个模块引用，
+          #             且只有 KASAN_HW_TAGS 会导出它；System.map 里的 __ksymtab_ 标签等价可查）
+          #   非强制 -> __ubsan_handle_*：实测没有任何原厂模块引用（原厂也是 UBSAN_TRAP=y，
+          #             处理函数不会产生符号），所以只报告不阻断
           if [ "${{ inputs.debug_info }}" = "true" ]; then
             SYMV="$GITHUB_WORKSPACE/artifacts/Module.symvers"
-            [ -f "$SYMV" ] || { echo "::error::Module.symvers 缺失，无法证明模块可见性"; exit 1; }
-            for s in kasan_flag_enabled __ubsan_handle_out_of_bounds __ubsan_handle_type_mismatch; do
-              if grep -qwE "^0x[0-9a-fA-F]+[[:space:]]+${s}[[:space:]]" "$SYMV"; then
-                echo "OK export $s"
-              else
-                echo "::error::Module.symvers 里没有 $s（原厂模块会 Unknown symbol）"; exit 1
-              fi
+            MAP="$GITHUB_WORKSPACE/artifacts/System.map"
+            ok=1
+            if [ -f "$SYMV" ]; then
+              echo "用 Module.symvers 校验导出（首选判据）"
+              for s in kasan_flag_enabled; do
+                if grep -qwE "^0x[0-9a-fA-F]+[[:space:]]+${s}[[:space:]]" "$SYMV"; then
+                  echo "OK export $s"
+                else
+                  echo "::error::Module.symvers 里没有 $s（原厂模块会 Unknown symbol）"; ok=0
+                fi
+              done
+            else
+              echo "::warning::本次没有 Module.symvers（只 make Image 时 modpost 不产出），退回 System.map 的 __ksymtab_ 标签"
+              for s in kasan_flag_enabled; do
+                if grep -q " __ksymtab_${s}$" "$MAP"; then
+                  echo "OK export $s (via System.map)"
+                else
+                  echo "::error::System.map 里没有 __ksymtab_$s"; ok=0
+                fi
+              done
+            fi
+            for s in __ubsan_handle_out_of_bounds __ubsan_handle_type_mismatch; do
+              grep -q " __ksymtab_${s}$" "$MAP" && echo "note: $s 已导出" || echo "note: $s 未导出（原厂模块也不引用，无影响）"
             done
+            [ "$ok" -eq 1 ] || exit 1
           fi
 
           sha256sum "$GITHUB_WORKSPACE/artifacts/Image" \
