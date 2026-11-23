@@ -3,9 +3,14 @@
 #  PLF110 (OnePlus ACE 5 Racing, MT6989, Android 16, 6.1.134)
 #  内核定制准备脚本：打补丁 + 生成 defconfig
 #  由 GitHub Actions 调用；本地 Linux 也能直接跑：
-#     KDIR=/path/to/android_kernel_oneplus_mt6989-770ca1ea... \
+#     KDIR=/path/to/android_kernel_oneplus_mt6989-xxxx \
 #     PATCH_RAW=https://raw.githubusercontent.com/WildKernels/kernel_patches/main \
+#     STOCK_CONFIG=$PWD/config/plf110_stock.config \
 #     bash scripts/prepare.sh
+#
+#  【本次策略：最小可用集】只保留 Droidspaces 容器必需项。
+#  关闭的功能不删除 —— 仍然写入 "# CONFIG_XXX is not set" 占位，
+#  这样 defconfig 里能一眼看到每个功能当前状态，改 true 即可恢复。
 # ============================================================
 set -euo pipefail
 
@@ -31,18 +36,30 @@ apply_optional() {
   return 1
 }
 
+# 统一的 "关闭占位" 输出：把 config 符号写成 "# CONFIG_X is not set"
+not_set() {
+  local s
+  for s in "$@"; do
+    printf '# CONFIG_%s is not set\n' "$s"
+  done
+}
+
 # ------------------------------------------------------------
 # 1. Droidspaces 必需补丁（GKI kABI 补丁，不能省）
 # ------------------------------------------------------------
-fetch "$PATCH_RAW/common/droidspaces/fix_sysvipc_kabi_6_7_8.patch" "$tmp/kabi.patch"
-apply "Droidspaces sysvipc kABI（sched.h 预留槽）" "$tmp/kabi.patch"
+if [ "${DROIDSPACES:-true}" = "true" ]; then
+  fetch "$PATCH_RAW/common/droidspaces/fix_sysvipc_kabi_6_7_8.patch" "$tmp/kabi.patch"
+  apply "Droidspaces sysvipc kABI（sched.h 预留槽）" "$tmp/kabi.patch"
 
-# OPLUS bsp_midas 在容器场景下的空任务 panic 修复
-fetch "$PATCH_RAW/common/droidspaces/0001-Return-ghost-task-if-task-is-null-and-is-requested-b.patch" "$tmp/ghost.patch"
-apply "OPLUS bsp_midas 空任务修复（kernel/pid.c）" "$tmp/ghost.patch"
+  # OPLUS bsp_midas 在容器场景下的空任务 panic 修复
+  fetch "$PATCH_RAW/common/droidspaces/0001-Return-ghost-task-if-task-is-null-and-is-requested-b.patch" "$tmp/ghost.patch"
+  apply "OPLUS bsp_midas 空任务修复（kernel/pid.c）" "$tmp/ghost.patch"
+else
+  say "DROIDSPACES=false：跳过 Droidspaces kABI/ghost 补丁"
+fi
 
 # ------------------------------------------------------------
-# 2. 可选功能补丁
+# 2. 可选功能补丁（本次全部 false，全部跳过）
 # ------------------------------------------------------------
 BBRV3_OK=false
 NTSYNC_OK=false
@@ -61,12 +78,12 @@ if [ "${NTSYNC:-false}" = "true" ]; then
   if [ "$NTSYNC_PARTS" -eq 2 ]; then NTSYNC_OK=true; fi
 fi
 
-if [ "${UNICODE:-false}" = "true" ]; then
+if [ "${UNICODE_FIX:-false}" = "true" ]; then
   fetch "$PATCH_RAW/common/unicode_bypass_fix_6.1-.patch" "$tmp/unicode.patch"
   apply_optional "Unicode 文件名兼容修复" "$tmp/unicode.patch"
 fi
 
-if [ "${SDP900:-false}" = "true" ]; then
+if [ "${SDP_CHARGE:-false}" = "true" ]; then
   fetch "$PATCH_RAW/oneplus/0001-misc-oplus-sdp-900ma.patch" "$tmp/sdp900.patch"
   apply_optional "USB SDP 充电 500mA -> 900mA" "$tmp/sdp900.patch"
 fi
@@ -109,17 +126,94 @@ fi
 #    基线 = 设备原厂 /proc/config.gz（生产配置，含 ARCH_MEDIATEK/OPLUS/MTK 全套内置驱动）
 #    !! 不能用 Google 的 gki_defconfig：那是通用最小配置，缺 200+ 个原厂 =y 的
 #       MTK/OPLUS 内置驱动，导致第一段 init 挂载失败 → kernel panic "Attempted to kill init"
-#    Kconfig 后写覆盖前写，所以我们的增量直接 append 在后面
+#    Kconfig 后写覆盖前写，所以增量直接 append 在后面
 # ------------------------------------------------------------
 cfg=arch/arm64/configs/plf110_defconfig
-say "写入配置（原厂 config + 功能增量）：$cfg"
+say "写入配置（原厂 config + 最小增量）：$cfg"
 [ -f "$STOCK_CONFIG" ] || { echo "STOCK_CONFIG 不存在: $STOCK_CONFIG" >&2; exit 1; }
 cp "$STOCK_CONFIG" "$cfg"
 
-# --- Droidspaces 核心（必须） ---
+# ============================================================
+# 3.1 关闭的功能：全部写成 "# CONFIG_XXX is not set" 占位
+#     （原厂 config 里这些符号本来就是 not set，这里再写一遍是显式固定，
+#       也保证不会有人以为"删掉就算关了"）
+# ============================================================
+{
+  echo
+  echo '# ============================================================'
+  echo '# 已关闭的功能（占位保留，不删除；改 features.env 为 true 即恢复）'
+  echo '# ============================================================'
+
+  # --- BBR ---
+  echo ''
+  echo '# ---- BBR（关闭）----'
+  not_set TCP_CONG_ADVANCED TCP_CONG_BBR
+
+  # --- BBRv3（源码补丁；补丁未打时符号不存在，kconfig 会静默忽略） ---
+  echo ''
+  echo '# ---- BBRv3（关闭，源码补丁未应用）----'
+  not_set TCP_CONG_BBR3
+
+  # --- 网络调度器（FQ 是原厂自带 =y，保留不动）---
+  echo ''
+  echo '# ---- 网络调度器（关闭；原厂 NET_SCH_FQ=y 保留）----'
+  not_set NET_SCH_CAKE NET_SCH_PIE NET_SCH_FQ_PIE
+
+  # --- IP_SET + IPv6 NAT ---
+  echo ''
+  echo '# ---- IP_SET + IPv6 NAT（关闭）----'
+  not_set IP_SET IP_SET_BITMAP_IP IP_SET_BITMAP_IPMAC IP_SET_BITMAP_PORT \
+          IP_SET_HASH_IP IP_SET_HASH_IPMARK IP_SET_HASH_IPPORT IP_SET_HASH_IPPORTIP \
+          IP_SET_HASH_IPPORTNET IP_SET_HASH_IPMAC IP_SET_HASH_MAC IP_SET_HASH_NETPORTNET \
+          IP_SET_HASH_NET IP_SET_HASH_NETNET IP_SET_HASH_NETPORT IP_SET_HASH_NETIFACE \
+          IP_SET_LIST_SET NETFILTER_XT_MATCH_ADDRTYPE NETFILTER_XT_SET \
+          IP6_NF_NAT IP6_NF_TARGET_MASQUERADE
+
+  # --- TTL / Hop-Limit ---
+  echo ''
+  echo '# ---- TTL / Hop-Limit target（关闭）----'
+  not_set IP_NF_TARGET_TTL IP6_NF_TARGET_HL IP6_NF_MATCH_HL
+
+  # --- NTSync（补丁未应用）---
+  echo ''
+  echo '# ---- NTSync（关闭，补丁未应用）----'
+  not_set NTSYNC
+
+  # --- NTFS3 ---
+  echo ''
+  echo '# ---- NTFS3（关闭）----'
+  not_set NTFS3_FS NTFS3_LZX_XPRESS NTFS3_FS_POSIX_ACL
+
+  # --- SQUASHFS ---
+  echo ''
+  echo '# ---- SQUASHFS（关闭）----'
+  not_set SQUASHFS SQUASHFS_XATTR SQUASHFS_ZSTD SQUASHFS_LZ4
+
+  # --- 额外文件系统（NETWORK_FILESYSTEMS 原厂=y，保留不动）---
+  echo ''
+  echo '# ---- 额外文件系统 ISO9660/UDF/CIFS/NFS（关闭）----'
+  not_set ISO9660_FS JOLIET ZISOFS UDF_FS CIFS CIFS_XATTR CIFS_POSIX \
+          NFS_FS NFS_V3 NFS_V4 NFS_V4_1
+
+  # --- 容器网络增强（MACVLAN 由 Droidspaces 管理，这里不碰）---
+  echo ''
+  echo '# ---- 容器网络增强 IPVLAN / XT_TARGET_CHECKSUM（关闭）----'
+  not_set IPVLAN NETFILTER_XT_TARGET_CHECKSUM
+
+  # --- 默认网络调优 ---
+  echo ''
+  echo '# ---- 默认网络调优（关闭）----'
+  not_set NET_SCH_DEFAULT
+} >> "$cfg"
+
+# ============================================================
+# 3.2 Droidspaces 核心（容器运行必需项，唯一开启的功能）
+# ============================================================
+if [ "${DROIDSPACES:-true}" = "true" ]; then
+  say "DROIDSPACES=true：写入容器必需配置"
 cat >> "$cfg" <<'EOF'
 
-# ==== Droidspaces 支持 ====
+# ==== Droidspaces 支持（容器运行必需） ====
 CONFIG_SYSVIPC=y
 CONFIG_POSIX_MQUEUE=y
 CONFIG_IPC_NS=y
@@ -136,9 +230,20 @@ CONFIG_TMPFS_XATTR=y
 CONFIG_TMPFS_POSIX_ACL=y
 CONFIG_NETFILTER_ADVANCED=y
 EOF
+else
+  {
+    echo
+    echo '# ==== Droidspaces 支持（关闭）===='
+    not_set SYSVIPC POSIX_MQUEUE IPC_NS UTS_NS PID_NS DEVTMPFS USER_NS \
+            MACVLAN NETFILTER_XT_TARGET_LOG NETFILTER_XT_MATCH_RECENT \
+            IP_NF_TARGET_REJECT IP6_NF_TARGET_REJECT TMPFS_XATTR TMPFS_POSIX_ACL
+  } >> "$cfg"
+fi
 
-# --- BBR ---
-if [ "${BBR:-true}" = "true" ]; then
+# ============================================================
+# 3.3 其它已关闭功能的配置增量
+# ============================================================
+if [ "${BBR:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
 # ==== BBR ====
@@ -154,7 +259,6 @@ CONFIG_TCP_CONG_BBR3=y
 EOF
 fi
 
-# --- NTSync（补丁成功才开配置） ---
 if [ "${NTSYNC_OK:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
@@ -163,8 +267,7 @@ CONFIG_NTSYNC=y
 EOF
 fi
 
-# --- 网络调度器 ---
-if [ "${NETSCHED:-true}" = "true" ]; then
+if [ "${NET_SCHED:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
 # ==== 网络调度器 ====
@@ -174,8 +277,7 @@ CONFIG_NET_SCH_FQ_PIE=y
 EOF
 fi
 
-# --- IP_SET + IPv6 NAT（Droidspaces NAT / UFW） ---
-if [ "${IPSET:-true}" = "true" ]; then
+if [ "${IP_SET_NAT:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
 # ==== IP_SET + IPv6 NAT ====
@@ -204,8 +306,7 @@ CONFIG_IP6_NF_TARGET_MASQUERADE=y
 EOF
 fi
 
-# --- TTL / Hop Limit ---
-if [ "${TTL:-false}" = "true" ]; then
+if [ "${TTL_TARGET:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
 # ==== TTL target（热点共享用） ====
@@ -215,8 +316,7 @@ CONFIG_IP6_NF_MATCH_HL=y
 EOF
 fi
 
-# --- NTFS3 ---
-if [ "${NTFS3:-true}" = "true" ]; then
+if [ "${NTFS3:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
 # ==== NTFS3 ====
@@ -226,8 +326,7 @@ CONFIG_NTFS3_FS_POSIX_ACL=y
 EOF
 fi
 
-# --- SQUASHFS ---
-if [ "${SQUASHFS:-true}" = "true" ]; then
+if [ "${SQUASHFS:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
 # ==== SQUASHFS ====
@@ -238,7 +337,6 @@ CONFIG_SQUASHFS_LZ4=y
 EOF
 fi
 
-# --- 额外文件系统：ISO9660/UDF（挂 ISO）+ CIFS/SMB（NAS）+ NFS ---
 if [ "${EXTRA_FS:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
@@ -258,7 +356,6 @@ CONFIG_NFS_V4_1=y
 EOF
 fi
 
-# --- 容器网络增强 ---
 if [ "${CONTAINER_NET:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
@@ -269,13 +366,12 @@ CONFIG_NETFILTER_XT_TARGET_CHECKSUM=y
 EOF
 fi
 
-# --- 默认网络调优（用 Kconfig 可见的 choice 选项，不能直接写派生字符串） ---
 if [ "${NET_DEFAULTS:-false}" = "true" ]; then
   {
     echo
     echo '# ==== 默认网络调优 ===='
-    if [ "${BBR:-true}" = "true" ]; then echo 'CONFIG_DEFAULT_BBR=y'; fi
-    if [ "${NETSCHED:-true}" = "true" ]; then
+    if [ "${BBR:-false}" = "true" ]; then echo 'CONFIG_DEFAULT_BBR=y'; fi
+    if [ "${NET_SCHED:-false}" = "true" ]; then
       echo 'CONFIG_NET_SCH_DEFAULT=y'
       echo 'CONFIG_DEFAULT_FQ=y'
     fi
@@ -283,14 +379,14 @@ if [ "${NET_DEFAULTS:-false}" = "true" ]; then
 fi
 
 # ------------------------------------------------------------
-# 4. LTO（CFI 不受影响：kcfi 不需要 LTO，保持原厂 CFI 开启以兼容 stock 模块）
+# 4. LTO（本次不动；CFI 不受影响：kcfi 不需要 LTO，原厂 CFI 保持开启以兼容 stock 模块）
 # ------------------------------------------------------------
-say "LTO 模式：${LTO_MODE:-thin}"
-case "${LTO_MODE:-thin}" in
+say "LTO 模式：${LTO_MODE:-none}"
+case "${LTO_MODE:-none}" in
   thin)
 cat >> "$cfg" <<'EOF'
 
-# ==== LTO thin（与原厂一致） ====
+# ==== LTO thin ====
 # CONFIG_LTO_NONE is not set
 CONFIG_LTO_CLANG_THIN=y
 EOF
@@ -298,7 +394,7 @@ EOF
   none)
 cat >> "$cfg" <<'EOF'
 
-# ==== 无 LTO（编译快；CFI 仍然开启） ====
+# ==== 无 LTO（与原厂一致；CFI 仍然开启）====
 CONFIG_LTO_NONE=y
 # CONFIG_LTO_CLANG_THIN is not set
 # CONFIG_LTO_CLANG_FULL is not set
@@ -309,11 +405,10 @@ EOF
 esac
 
 # ------------------------------------------------------------
-# 5. 生产化：关掉原厂 gki_defconfig 里的调试选项（KASAN/KFENCE/UBSAN/BTF…）
-#    —— 这些在 ACK 的 gki_defconfig 里是开着的，日常使用不需要，关掉更快更省内存
+# 5. 调试选项（本次不动：DEBUG_INFO=false 时关闭 KASAN/KFENCE/UBSAN/BTF…）
 # ------------------------------------------------------------
 if [ "${DEBUG_INFO:-false}" != "true" ]; then
-say "关闭调试选项（KASAN/KFENCE/UBSAN/PAGE_OWNER/PANIC_ON_OOPS/DEBUG_INFO/BTF/KUNIT）"
+  say "关闭调试选项（KASAN/KFENCE/UBSAN/PAGE_OWNER/PANIC_ON_OOPS/DEBUG_INFO/BTF/KUNIT）"
 cat >> "$cfg" <<'EOF'
 
 # ==== Production debug off ====
@@ -332,7 +427,7 @@ EOF
 fi
 
 # ------------------------------------------------------------
-# 6. 其它小配置
+# 6. 其它小配置（本次不动）
 # ------------------------------------------------------------
 cat >> "$cfg" <<'EOF'
 
@@ -343,4 +438,4 @@ CONFIG_TUN=y
 EOF
 
 say "准备完成"
-tail -n 12 "$cfg"
+tail -n 15 "$cfg"

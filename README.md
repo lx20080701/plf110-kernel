@@ -4,7 +4,8 @@
 
 - 源码：`OnePlusOSS/android_kernel_oneplus_mt6989` @ `700216a4`（PLF110_16.0.0.203，内核 **6.1.134**，与本机 16.0.2.401 固件 2025-12-09 构建日最接近）+ 同一批次的厂商树 `android_kernel_modules_and_devicetree_oneplus_mt6989` @ `ae37b666`（内核树里 `drivers/soc/oplus/*` 等符号链接指向它的 `vendor/oplus/...`，缺了 Kconfig 解析直接失败）
 - **配置基线 = 本机原厂 `/proc/config.gz`**（`config/plf110_stock.config`，由 `adb shell su -c 'zcat /proc/config.gz'` 导出）
-  ⚠️ **不能用 Google 的 `gki_defconfig`**：那是通用最小配置，缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动（`ARCH_MEDIATEK`、`UFSFEATURE`、`OPLUS_CHARGER*`、`MTK_CCCI_DEVICES` 等），编出来会出现 **"第一段 init 挂载失败 → kernel panic: Attempted to kill init" 然后直接重启**（已实测踩坑）
+  ⚠️ **不能用 Google 的 `gki_defconfig`**：那是通用最小配置，缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动（`ARCH_MEDIATEK`、`OPLUS_CHARGER*`、`MTK_CCCI_DEVICES` 等），编出来会出现 **"第一段 init 挂载失败 → kernel panic: Attempted to kill init" 然后直接重启**（已实测踩坑）
+  ℹ️ 原厂 config 里混有一批**只存在于厂商 modules 树**的符号（`UFSFEATURE`、`UFSTW`、`DEVICE_MODULES_*` 等，原厂 build 脚本后补进 `.config` 的装饰行）；GKI 树里没有这些 Kconfig 符号，kconfig 会**静默丢弃**（只有设 `KCONFIG_WARN_UNKNOWN_SYMBOLS` 才报）。所以基线断言只能挑真正的 GKI 符号（如 `ARCH_MEDIATEK`），不能拿 `UFSFEATURE` 断言——上一轮 run3 就死在这上面。
 - LTO 与原厂一致用 **`none`**（原厂 `CONFIG_LTO_NONE=y`），CFI 保持开启
 - 输出：`Image`（ARM64 内核镜像）+ `Module.symvers`（用于核对 vendor 模块 kABI 兼容性）+ 可刷入的 AnyKernel3 zip
 - 已内置：**Droidspaces 内核支持**（kABI 补丁 + SYSVIPC/PID_NS/IPC_NS/USER_NS 等配置）
@@ -38,7 +39,7 @@
 
 | 选项 | 说明 |
 |---|---|
-| `lto` | `thin` = 原厂一致（**默认**，约 60–90 分钟）；`none` = 快（约 25–40 分钟，CFI 依旧开启） |
+| `lto` | `none` = 与原厂一致（**默认**，约 25–40 分钟，CFI 依旧开启）；`thin` = 实验（约 60–90 分钟） |
 | `debug_info` | 保持 `false`。改成 true 会带上 KASAN/BTF/调试信息，非常慢，只用于排查内核 bug |
 
 点 **Run workflow** 后等它跑完（页面会实时显示日志）。
@@ -61,8 +62,8 @@
 
 打开 `config/features.env`，把对应项改成 `true` / `false`，提交（Commit）后重新 **Run workflow** 即可。
 
-当前默认开启：Droidspaces 全套、BBR、网络调度器、IP_SET+IPv6 NAT、NTSync、SDP 900mA 充电、NTFS3、SQUASHFS、Unicode 修复。
-默认关闭：BBRv3、TTL 目标（都可以改 true 再编）。
+**当前策略：最小可用集** —— 只开 `DROIDSPACES=true`，其余全部 `false`（BBR / BBRv3 / NET_SCHED / IP_SET_NAT / TTL_TARGET / SDP_CHARGE / NTSYNC / NTFS3 / SQUASHFS / UNICODE_FIX / PERF_TWEAKS / EXTRA_FS / CONTAINER_NET / NET_DEFAULTS）。
+目的：变量降到最少，万一起不来容易定位。**关闭 ≠ 删除**：`scripts/prepare.sh` 仍会把每个关闭的功能写成 `# CONFIG_XXX is not set` 占位留在 defconfig 里，改 `true` 立刻恢复。
 
 > 注意：`Image` 是直接在 boot 分区里跑的内核，**所有功能必须是内置（`=y`）**，本仓库脚本已经按这个原则处理。
 

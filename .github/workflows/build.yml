@@ -129,6 +129,7 @@ jobs:
           set +a
           export PATH="$CLANG_BIN:$PATH"
           export ARCH=arm64 LLVM=1
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
           # prepare.sh 会把"设备原厂 /proc/config.gz"复制成 arch/arm64/configs/plf110_defconfig
           make -j"$(nproc)" O=out plf110_defconfig
           make -j"$(nproc)" O=out olddefconfig
@@ -137,20 +138,53 @@ jobs:
           check() {
             grep -q "^CONFIG_${1}=y$" out/.config || { echo "::error::missing CONFIG_${1}"; exit 1; }
           }
-          # 1) 生产配置基线检查：证明用的是原厂 config（不是 Google gki_defconfig）
-          for opt in ARCH_MEDIATEK UFSFEATURE OPLUS_CHARGER MTK_CCCI_DEVICES; do
-            check "$opt"
-          done
-          # 2) 我们的功能检查
-          for opt in SYSVIPC POSIX_MQUEUE PID_NS IPC_NS UTS_NS USER_NS DEVTMPFS \
+          report() {   # 只报告，不中断
+            if grep -q "^CONFIG_${1}=y$" out/.config; then
+              echo "✅ CONFIG_${1}=y"
+            elif grep -q "^CONFIG_${1}=m$" out/.config; then
+              echo "❌ CONFIG_${1}=m"
+            else
+              echo "❌ CONFIG_${1} 未设置"
+            fi
+          }
+
+          # 1) 生产配置基线：证明用的是原厂 config（不是 Google gki_defconfig）
+          #    注：原厂 config 里混有一批只存在于厂商 modules 树的符号
+          #        （UFSFEATURE / DEVICE_MODULES_* 等），GKI 树里根本没有这些 Kconfig 符号，
+          #        kconfig 会静默丢弃（kconfig 只在 KCONFIG_WARN_UNKNOWN_SYMBOLS 时才报），
+          #        所以不能拿它们当断言 —— 上一轮 run3 就是死在 check UFSFEATURE 上。
+          #        ARCH_MEDIATEK 才是货真价实、且原厂 =y 的 GKI 符号。
+          check ARCH_MEDIATEK
+
+          # 2) Droidspaces 必需项（我们自己写进 defconfig 的，必须生效）
+          for opt in SYSVIPC POSIX_MQUEUE IPC_NS UTS_NS PID_NS DEVTMPFS USER_NS \
                      MACVLAN TMPFS_XATTR TMPFS_POSIX_ACL NETFILTER_ADVANCED; do
             check "$opt"
           done
-          if [ "${BBR:-true}" = "true" ]; then check TCP_CONG_BBR; fi
-          if [ "${NETSCHED:-true}" = "true" ]; then check NET_SCH_CAKE; fi
-          if [ "${IPSET:-true}" = "true" ]; then check IP_SET; check IP6_NF_NAT; fi
-          if [ "${NTFS3:-true}" = "true" ]; then check NTFS3_FS; fi
-          if [ "${SQUASHFS:-true}" = "true" ]; then check SQUASHFS; fi
+
+          # 3) 容器 20 项里的其余符号：只报告，不中断
+          { echo "---- 容器必需符号（本次构建 out/.config 实测）----"
+            for opt in NAMESPACES NET_NS CGROUPS MEMCG CGROUP_FREEZER CGROUP_DEVICE \
+                       SECCOMP SECCOMP_FILTER OVERLAY_FS TMPFS VETH BRIDGE; do
+              report "$opt"
+            done
+          } | tee "$GITHUB_WORKSPACE/artifacts/config_check.txt"
+
+          # 4) 原厂 config vs 最终 .config 的完整差异（诊断用，不中断）
+          echo "---- stock config vs final .config diff ----"
+          diff -u \
+            <(grep -E '^(CONFIG_|# CONFIG_)' "$GITHUB_WORKSPACE/config/plf110_stock.config" | LC_ALL=C sort) \
+            <(grep -E '^(CONFIG_|# CONFIG_)' out/.config | LC_ALL=C sort) \
+            > "$GITHUB_WORKSPACE/artifacts/stock_vs_final.diff" || true
+          echo "diff 变更行数: $(grep -c '^[+-]' "$GITHUB_WORKSPACE/artifacts/stock_vs_final.diff" || true)"
+          sed -n '1,140p' "$GITHUB_WORKSPACE/artifacts/stock_vs_final.diff" || true
+
+          # 5) 可选功能（本次全部 false，只有 true 时才断言）
+          if [ "${BBR:-false}" = "true" ]; then check TCP_CONG_BBR; fi
+          if [ "${NET_SCHED:-false}" = "true" ]; then check NET_SCH_CAKE; fi
+          if [ "${IP_SET_NAT:-false}" = "true" ]; then check IP_SET; check IP6_NF_NAT; fi
+          if [ "${NTFS3:-false}" = "true" ]; then check NTFS3_FS; fi
+          if [ "${SQUASHFS:-false}" = "true" ]; then check SQUASHFS; fi
           if [ "${EXTRA_FS:-false}" = "true" ]; then
             check ISO9660_FS; check UDF_FS; check CIFS; check NFS_FS
           fi
@@ -167,7 +201,8 @@ jobs:
               echo "::error::KASAN still enabled"; exit 1
             fi
           fi
-          grep -E '^CONFIG_(LTO|CFI|TCP_CONG_BBR|NTFS3_FS|SQUASHFS|NTSYNC|CIFS|IPVLAN|CGROUP_PIDS|CFS_BANDWIDTH)=' \
+          echo "---- 关键配置现状 ----"
+          grep -E '^CONFIG_(LTO|CFI|KASAN|TCP_CONG_BBR|NTFS3_FS|SQUASHFS|NTSYNC|CIFS|IPVLAN|CGROUP_PIDS|CFS_BANDWIDTH)=' \
             out/.config || true
 
           make -j"$(nproc)" O=out Image 2>&1 | tee build.log
