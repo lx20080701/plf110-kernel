@@ -112,6 +112,7 @@ jobs:
       - name: Apply patches and config
         env:
           LTO_MODE: ${{ inputs.lto }}
+          DEBUG_INFO: ${{ inputs.debug_info }}   # run7 教训：之前漏了这一行，debug_info=true 根本没传给 prepare.sh
           STOCK_CONFIG: ${{ github.workspace }}/config/plf110_stock.config
         run: |
           set -e

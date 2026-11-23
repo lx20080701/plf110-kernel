@@ -1,0 +1,20 @@
+--- a/kernel/module/version.c
++++ b/kernel/module/version.c.new
+@@ -50,9 +50,16 @@ int check_version(const struct load_info *info,
+ 	pr_warn_once("%s: no symbol version for %s\n", info->name, symname);
+ 	return 1;
+ 
++/*
++ * oplus-kabi-bypass: stock vendor modules were built from a source drop
++ * that is not published (16.0.2.401), so genksyms CRCs differ even though
++ * the ABI is identical: full BTF struct comparison shows 10335 common
++ * structs with only 5 OEM-internal ones differing and struct module's 70
++ * members at exactly the same offsets. Warn but do not reject the module.
++ */
+ bad_version:
+ 	pr_warn("%s: disagrees about version of symbol %s\n", info->name, symname);
+-	return 0;
++	return 1;
+ }
+ 
+ int check_modstruct_version(const struct load_info *info,

@@ -59,6 +59,30 @@ else
 fi
 
 # ------------------------------------------------------------
+# 1.5 kABI CRC 校验旁路（必须！）
+#    手机固件 PLF110_16.0.2.401 的内核源码从未公开，仓库里最接近的两个版本
+#    （16.0.0.203 / 16.0.3.500）编出来的 genksyms CRC 摘要都与原厂不同，
+#    run6/run7 实测 51 个符号里 19 个 CRC 不一致 → 原厂 vendor 模块全部被
+#    "disagrees about version of symbol module_layout" 拒绝加载 →
+#    UFS 等存储模块装不上 → 找不到 super/metadata 分区 → init panic 重启。
+#    但 BTF 全量比对已证明真实 ABI 一致：10335 个公共结构体只有 5 个 OEM 内部
+#    结构体有差异，struct module 的 70 个字段偏移完全相同。
+#    因此这里让内核只打警告、不拒绝加载。
+# ------------------------------------------------------------
+if [ "${KABI_BYPASS:-true}" = "true" ]; then
+  say "kABI CRC 校验旁路（放行原厂 vendor 模块）"
+  if patch -p1 --forward --fuzz=3 < "$GITHUB_WORKSPACE/patches/kabi_bypass.patch"; then
+    grep -q 'oplus-kabi-bypass' kernel/module/version.c \
+      || { echo "::error::kABI bypass 补丁内容校验失败"; exit 1; }
+    echo "kABI bypass 已生效"
+  else
+    echo "::error::kABI bypass 补丁应用失败"; exit 1
+  fi
+else
+  say "KABI_BYPASS=false：保留严格 CRC 校验（原厂模块将无法加载）"
+fi
+
+# ------------------------------------------------------------
 # 2. 可选功能补丁（本次全部 false，全部跳过）
 # ------------------------------------------------------------
 BBRV3_OK=false
