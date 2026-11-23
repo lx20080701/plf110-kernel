@@ -238,3 +238,16 @@ verify/                       # 符号完备性 / boot 镜像校验 / 厂商模�
 
 刷机有风险（变砖、数据丢失、失去保修）。本仓库所有镜像均在本机实测通过，但**请自行确认已备份原厂 boot/init_boot**（Release 里提供了原厂镜像）。
 不修改 `abl/xbl/tz/hyp/vbmeta` 等分区；刷写前请确认 `fastboot getvar unlocked` 为 `yes`。
+
+---
+
+<details>
+<summary>🥚 彩蛋（点开有惊喜）</summary>
+
+📖 **[内核日记：两天从白屏到 NTsync 的草生长征](docs/DIARY.md)**
+
+一份带体温的工程考古记录：白屏三连、pstore 尸检、CRC 吵架式验亲、与 PID 1 斗智斗勇、USB 的三种状态、PowerShell 六坑，以及"599 行里其实有一行是表头"这种只有踩过坑才知道的细节。
+
+> 建议在摸鱼时阅读，不建议在写代码前阅读。
+
+</details>
