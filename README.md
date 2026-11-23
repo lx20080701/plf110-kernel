@@ -1,118 +1,203 @@
-# PLF110 (OnePlus ACE 5 Racing) 内核云编译
+# PLF110（一加 Ace 5 竞速版）自编内核 + Droidspaces
 
-在 **GitHub Actions 免费云端**编译你手机的内核：
-
-- 源码：`OnePlusOSS/android_kernel_oneplus_mt6989` @ `700216a4`（PLF110_16.0.0.203，内核 **6.1.134**，与本机 16.0.2.401 固件 2025-12-09 构建日最接近）+ 同一批次的厂商树 `android_kernel_modules_and_devicetree_oneplus_mt6989` @ `ae37b666`（内核树里 `drivers/soc/oplus/*` 等符号链接指向它的 `vendor/oplus/...`，缺了 Kconfig 解析直接失败）
-- **配置基线 = 本机原厂 `/proc/config.gz`**（`config/plf110_stock.config`，由 `adb shell su -c 'zcat /proc/config.gz'` 导出）
-  ⚠️ **不能用 Google 的 `gki_defconfig`**：那是通用最小配置，缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动（`ARCH_MEDIATEK`、`OPLUS_CHARGER*`、`MTK_CCCI_DEVICES` 等），编出来会出现 **"第一段 init 挂载失败 → kernel panic: Attempted to kill init" 然后直接重启**（已实测踩坑）
-  ℹ️ 原厂 config 里混有一批**只存在于厂商 modules 树**的符号（`UFSFEATURE`、`UFSTW`、`DEVICE_MODULES_*` 等，原厂 build 脚本后补进 `.config` 的装饰行）；GKI 树里没有这些 Kconfig 符号，kconfig 会**静默丢弃**（只有设 `KCONFIG_WARN_UNKNOWN_SYMBOLS` 才报）。所以基线断言只能挑真正的 GKI 符号（如 `ARCH_MEDIATEK`），不能拿 `UFSFEATURE` 断言——上一轮 run3 就死在这上面。
-- 🔴 **kABI 红线（run5 的血的教训）**：`CONFIG_DEBUG_INFO` / `DEBUG_INFO_DWARF4` / `DEBUG_INFO_BTF` / `DEBUG_INFO_BTF_MODULES` / `KUNIT` **必须保持原厂的 `=y`**。
-  `struct module` 里有两段 `#ifdef`（`CONFIG_DEBUG_INFO_BTF_MODULES` → `btf_data*`、`CONFIG_KUNIT` → `kunit_suites*`），改了它们 layout 就变；而导出符号 `module_layout` 的 CRC 是 genksyms 按该函数签名（`struct module *` 等）算的、**包含 struct module 完整定义** → CRC 变 → 原厂 vendor 模块全部报
-  `disagrees about version of symbol module_layout` / `Exec format error` → 第一段 init 加载不了模块 → 机器无提示直接重启。
-  所以 `prepare.sh` 只关**与导出 CRC 无关**的调试项（KASAN/KFENCE/UBSAN/PAGE_OWNER/PANIC_ON_OOPS），并把上面 5 个 ABI 符号显式钉成 `=y`，workflow 里也有硬断言。
-- LTO 与原厂一致用 **`none`**（原厂 `CONFIG_LTO_NONE=y`），CFI 保持开启
-- 构建修正：原厂 config 的 `CONFIG_MODULE_SIG_KEY="$(DEVICE_MODULES_REL_DIR)/certs/mtk_signing_key.pem"` 在 OSS 编译时 `$(DEVICE_MODULES_REL_DIR)` 展开为空 → 变成 `/certs/mtk_signing_key.pem`，make 直接失败（run4 的坑）。`prepare.sh` 已覆盖为内核默认 `certs/signing_key.pem`（构建时自动生成一次性密钥；`MODULE_SIG_FORCE` 原厂就是 `n`，不影响加载原厂 vendor 模块）
-- ✅ **run #5 已完整编译成功**（`lto=none`、`debug_info=false`，约 12 分钟），产物见 Actions 的 `kernel-PLF110-A16-6.1.134-5`
-- 输出：`Image`（ARM64 内核镜像）+ `Module.symvers`（用于核对 vendor 模块 kABI 兼容性）+ 可刷入的 AnyKernel3 zip
-- 已内置：**Droidspaces 内核支持**（kABI 补丁 + SYSVIPC/PID_NS/IPC_NS/USER_NS 等配置）
-- 你的编译产物还可以保留 **FolkPatch** root（刷机流程见文末）
-
----
-
-## 一、怎么用（首次 5 分钟配置）
-
-### 1. 建一个 GitHub 仓库
-
-在 github.com 右上角 **+ → New repository**，随便起名（例如 `plf110-kernel`），Private 也可以，**不要**勾选 README（保持空仓库）。
-
-### 2. 把本目录传到仓库
-
-任选一种：
-
-- **GitHub Desktop**（推荐，Windows 上最简单）：File → Add local repository → 选中 `plf110-kernel-ci` 文件夹 → 出现 "Publish repository" → 发布。
-- **网页上传**：在仓库首页点 **Add file → Upload files**，把 `plf110-kernel-ci` 里的内容拖进去（注意 `.github` 是隐藏目录，如果漏了：**Add file → Create new file**，文件名输入 `.github/workflows/build.yml`，再把文件内容粘进去；`config/features.env`、`scripts/prepare.sh` 同理）。
-- **命令行**（已装 git）：
-  ```bash
-  cd plf110-kernel-ci
-  git init && git add -A && git commit -m "init"
-  git remote add origin https://github.com/<你的用户名>/plf110-kernel.git
-  git branch -M main && git push -u origin main
-  ```
-
-### 3. 跑编译
-
-仓库页面 → **Actions** 标签 → 左侧选 **Build PLF110 kernel (6.1.134 + Droidspaces)** → 右侧 **Run workflow**：
-
-| 选项 | 说明 |
-|---|---|
-| `lto` | `none` = 与原厂一致（**默认**，约 25–40 分钟，CFI 依旧开启）；`thin` = 实验（约 60–90 分钟） |
-| `debug_info` | 保持 `false`。改成 true 会带上 KASAN/BTF/调试信息，非常慢，只用于排查内核 bug |
-
-点 **Run workflow** 后等它跑完（页面会实时显示日志）。
-
-### 4. 下载产物
-
-跑完后进入该次运行页面，底部 **Artifacts** → `kernel-PLF110-A16-6.1.134-<序号>`，里面：
-
-| 文件 | 说明 |
-|---|---|
-| `Image` | 编译出的内核镜像（后面打包 boot.img 用） |
-| `AK3_*.zip` | AnyKernel3 刷机包（KernelFlasher 可直接刷，但会丢 FolkPatch） |
-| `kernel.config` | 最终内核配置（可核对功能是否都开上了） |
-| `build.log` | 完整编译日志 |
-| `Image.sha256` | 校验值 |
-
----
-
-## 二、改功能
-
-打开 `config/features.env`，把对应项改成 `true` / `false`，提交（Commit）后重新 **Run workflow** 即可。
-
-**当前策略：最小可用集** —— 只开 `DROIDSPACES=true`，其余全部 `false`（BBR / BBRv3 / NET_SCHED / IP_SET_NAT / TTL_TARGET / SDP_CHARGE / NTSYNC / NTFS3 / SQUASHFS / UNICODE_FIX / PERF_TWEAKS / EXTRA_FS / CONTAINER_NET / NET_DEFAULTS）。
-目的：变量降到最少，万一起不来容易定位。**关闭 ≠ 删除**：`scripts/prepare.sh` 仍会把每个关闭的功能写成 `# CONFIG_XXX is not set` 占位留在 defconfig 里，改 `true` 立刻恢复。
-
-> 注意：`Image` 是直接在 boot 分区里跑的内核，**所有功能必须是内置（`=y`）**，本仓库脚本已经按这个原则处理。
-
----
-
-## 三、编译完成后怎么刷（保留 FolkPatch）
-
-GitHub Actions 只产出 `Image`，还需要把 `Image` 塞回你手机的 boot.img 并重新打 FolkPatch 补丁。流程：
-
-1. 把产物里的 `Image` 下载到电脑（例如 `F:\114514\Image`）。
-2. 用你备份的**原厂 boot.img** 打包出 `boot_new.img`（用 magiskboot / mkbootimg，需要原厂内核之外的 ramdisk，这个我可以帮你做，把 boot.img 放 F:\114514 即可）。
-3. 手机装 **FolkPatch** → 选择 `boot_new.img` 离线打补丁 → 刷入 boot 分区（或用电脑 fastboot 刷）。
-4. 重启后 `设置 → 关于手机 → 内核版本` 应显示你编的版本；`uname -r` 能看到版本号。
-5. 装 Droidspaces → **Settings → Requirements → Check Requirements** 全绿即成功。
-
-> 如果刷炸了：进 fastboot 刷回你备份的 boot 即可，数据不会丢。
-
----
-
-## 四、出问题怎么办
-
-- Actions 页面那一步标红 → 点开看日志，把 **红字/最后 50 行** 发给我，我改脚本。
-- 常见：网络下载超时（重跑一次即可）、`patch` 拒绝应用（上游补丁更新了，我调偏移/换变体）。
-- 不要在没有备份的情况下刷任何东西。
-
----
-
-## ✅ 已验证可启动版本（2026-11-23，run #11）
-
-本仓库当前状态：**自编内核已在本机成功启动，并跑起 Droidspaces 容器。**
+> **状态：✅ 已实机验证可用（2026-11-23）**
+> 自编内核 `6.1.134-g04555ae11869` 在本机成功启动（`boot_completed=1`），root、外设全部正常，
+> **Droidspaces 容器（systemd / Azure Linux 3.0）已跑起来**，NAT 网络 + DNS 正常。
 
 | 项目 | 结果 |
 |---|---|
-| 内核 | `6.1.134-g04555ae11869`，`boot_completed=1` |
-| 内核模块 | 598/600 原厂模块加载（缺 2 个 OPLUS scx 调度模块，无外设影响） |
-| root | FolkPatch 0.13.9 重打后正常（`uid=0(root)`） |
-| 外设 | 显示/触摸/指纹/传感器/WiFi/蓝牙/相机/音频/充电/USB/马达 全部验证通过 |
-| 容器 | Droidspaces v7.2.0，systemd running，Azure Linux 3.0，NAT 网络+DNS 正常 |
+| 设备 | OnePlus PLF110 / MT6989 / Android 16（固件 16.0.2.401） |
+| 内核 | `6.1.134-g04555ae11869`（CFI 开、LTO=none、KASAN_HW_TAGS，与原厂 ABI 对齐） |
+| 内核模块 | 598 / 600 原厂模块加载成功（缺 2 个 OPLUS scx 性能调度模块，无外设影响） |
+| root | FolkPatch 0.13.9（`su -c id` → `uid=0(root)`） |
+| 外设 | 显示/触摸/按键/指纹/传感器(40)/WiFi/蓝牙/相机/音频/充电/USB/马达 全部验证通过 |
+| 容器 | Droidspaces v7.2.0，`systemctl is-system-running` = **running**，容器 IP `172.28.186.11`，外网/DNS 通 |
+| 启动耗时 | 开机到 `sys.boot_completed=1` 约 **22.8 秒** |
 
-- 完整记录（构建参数、kABI 处理、符号完备性证明、实机验证、回滚流程）：**[docs/VERIFIED_BUILD.md](docs/VERIFIED_BUILD.md)**
-- 验证脚本与基线数据：**[verify/](verify/)**
-- 成品镜像（boot / FolkPatch root 版 / Image / System.map / config + 校验值）：见本仓库 **Releases** 页面标签 `plf110-6.1.134-droidspaces-v1`
+- 📄 完整技术记录（构建参数 / kABI 处理 / 符号完备性证明 / 实机验证 / 回滚）：**[docs/VERIFIED_BUILD.md](docs/VERIFIED_BUILD.md)**
+- 🧪 验证工具与基线数据：**[verify/](verify/)**
+- 📦 全部成品镜像：**[Releases › `plf110-6.1.134-droidspaces-v1`](../../releases/tag/plf110-6.1.134-droidspaces-v1)**
 
-关键补丁：
-- `patches/kabi_bypass.patch` —— 固件 16.0.2.401 源码未公开导致 genksyms CRC 与原厂 vendor 模块不一致；BTF 全量比对证明 ABI 兼容后，让内核只警告不拒绝加载（`KABI_BYPASS=true`）
-- `prepare.sh` 中 kABI 红线 + Droidspaces 配置 + 符号断言（KASAN_HW_TAGS / UBSAN / MODVERSIONS / Module.symvers 导出检查）
+---
+
+## 一、直接下载使用（不自己编译）
+
+Release 里一共有 9 个文件：
+
+| 资产 | 内容 | 大小 | sha256（前 16 位） |
+|---|---|---|---|
+| `boot_run11_6.1.134.img` | **自编内核 + 原厂纯净 ramdisk**（无 root） | 64 MB | `c152ed9bfc5d1545…` |
+| `folk_patched_115404_0.13.9_tklj.img` | **自编内核 + FolkPatch root**（推荐直接用） | 64 MB | `e5ef715770342ecc…` |
+| `Image` | ARM64 内核镜像（打 boot 用） | 34.2 MB | `4fb42c92d0e3eca3…` |
+| `System.map` | 符号表（调试/定位用） | 4.7 MB | `e6a278f3a7cc5f85…` |
+| `kernel.config` | 最终内核配置 | 211 KB | `801c6b06217b36cf…` |
+| `missing_symbols_run11.txt` | 相对原厂模块的符号缺口（22 个） | 716 B | — |
+| `stock_boot_original.img` | **完整原厂 boot**（内核 `6.1.134-android14-11-o-g8f3b9b4f58d8`，零改动） | 64 MB | `16b0b00eb63ef046…` |
+| `stock_boot_folkpatch_root.img` | **原厂内核 + FolkPatch root**（最稳救砖镜像） | 64 MB | `224794ed8a2d3aab…` |
+| `stock_init_boot_original.img` | **原厂 init_boot**（完整回滚用） | 8 MB | `917dacdf28781f59…` |
+
+> 完整 sha256 见 Release 页面（GitHub 会显示每个资产的 digest），或 `docs/VERIFIED_BUILD.md` 第六节。
+
+### 刷入
+
+```bash
+adb reboot bootloader
+
+# 自编内核（无 root）
+fastboot flash boot boot_run11_6.1.134.img
+
+# 或者：自编内核 + root（推荐）
+fastboot flash boot folk_patched_115404_0.13.9_tklj.img
+
+fastboot reboot
+```
+
+刷完验证：
+
+```bash
+adb shell uname -r                  # 应显示 6.1.134-g04555ae11869
+adb shell getprop sys.boot_completed # 1
+adb shell 'su -c id'                # 有 root 版应返回 uid=0(root)
+```
+
+### 回滚
+
+```bash
+adb reboot bootloader
+fastboot flash boot stock_boot_original.img        # 完全原厂
+# fastboot flash init_boot stock_init_boot_original.img   # 仅在动过 init_boot 时需要
+fastboot reboot
+```
+
+⚠️ **本机 `fastboot boot`（临时启动）不支持**，只能 `flash`；解锁状态下校验已关闭，原厂镜像可直接刷。
+⚠️ 刷机前请确认自己有可用的救砖镜像（Release 里就有）。
+
+---
+
+## 二、自己编译（GitHub Actions 云端，免费）
+
+一条工作流完成：拉内核源码 + 厂商模块树 → 拉 Android clang → 打补丁 → 生成配置 → `make Image` → 硬断言校验 → 上传产物。
+
+### 2.1 版本与工具链（当前固定）
+
+| 项 | 值 |
+|---|---|
+| 内核源码 | `OnePlusOSS/android_kernel_oneplus_mt6989` @ `76bcc45d`（PLF110_16.0.3.500，6.1.134） |
+| 厂商模块树 | `..._modules_and_devicetree_oneplus_mt6989` @ `efa5a76b`（**必须配套**，内核树有 8 个符号链接指向它） |
+| 工具链 | Android clang **r487747c / 17.0.2**（与原厂 vendor 模块构建工具链完全一致） |
+| 配置基线 | 本机原厂 `/proc/config.gz` → `config/plf110_stock.config` |
+
+### 2.2 运行
+
+1. 把本仓库内容推到你自己的 GitHub 仓库（Fork 或新建后上传均可，注意 `.github/` 是隐藏目录）
+2. 仓库 → **Actions** → 左侧 **Build PLF110 kernel** → 右侧 **Run workflow**
+
+| 输入 | 说明 |
+|---|---|
+| `lto` | `none`（默认，与原厂一致）；`thin` 为实验项，很慢，不建议 |
+| `debug_info` | `false` = 精简构建；**`true` = 与原厂配置完全一致（KASAN_HW_TAGS/BTF/UBSAN 全开）——想兼容原厂 vendor 模块必须用 true** |
+
+> 历史教训：`debug_info=true` 曾被 `config/features.env` 里的同名变量反向覆盖（run10 白编 16 分钟），现在 workflow 里有闸门：`features.env` 出现 `DEBUG_INFO/KABI_BYPASS/LTO_MODE` 会直接失败。
+
+### 2.3 产物
+
+`kernel-PLF110-A16-6.1.134-<序号>` artifact 内含：`Image`、`System.map`、`kernel.config`、`build.log`、`config_check.txt`、`stock_vs_final.diff`、`AK3_*.zip`（AnyKernel3 包，会丢 FolkPatch）。
+
+---
+
+## 三、关键技术点（这版为什么能跑起来）
+
+### 1. 配置基线必须是原厂 `/proc/config.gz`
+
+用 Google `gki_defconfig` 会缺 200+ 个原厂 `=y` 的 MTK/OPLUS 内置驱动 → 第一段 init 挂不上分区 → `Kernel panic: Attempted to kill init`。
+原厂 config 里还混有**只存在于厂商模块树**的符号（`UFSFEATURE`、`DEVICE_MODULES_*` 等），GKI 树里没有对应 Kconfig，kconfig 会静默丢弃 —— 所以断言只挑真正的 GKI 符号（如 `ARCH_MEDIATEK`）。
+
+### 2. kABI：CRC 不一致 ≠ ABI 不兼容
+
+本机固件 `16.0.2.401` 的内核源码从未公开；用公开源码构建时，原厂 vendor 模块的 genksyms CRC 与本内核不一致
+（51 个符号中 19 个不同，`module_layout` 原厂期望 `0xea759d7f`，本地算出 `0xb1ac0e57`）→ 模块被 `disagrees about version of symbol` 拒绝 → init 起不来。
+
+但 CRC 只是类型摘要文本的哈希。用两个内核的 **BTF 段做全量结构体比对**：
+
+- 10335 个公共结构体，**只有 5 个有差异**（`kmem_cache` 因 KASAN 开关；`oplus_task_struct` / `task_struct` / `rq` / `task_group` 为 OEM 内部字段或 `android_kabi_reserved` 命名差异）
+- `struct module` 70 个字段**偏移完全相同**
+
+结论：真实 ABI 兼容。因此 `patches/kabi_bypass.patch` 只改 `kernel/module/version.c` 里 `check_version()` 的 `bad_version` 分支（`return 0` → `return 1`，只警告不拒绝），开关 `KABI_BYPASS=true`。
+
+### 3. KASAN 必须开，而且是 `KASAN_HW_TAGS`
+
+`kasan_flag_enabled` 这个符号**只有 `CONFIG_KASAN_HW_TAGS`（MTE 硬件标签，运行时可开关）才导出**，而原厂有 22 个模块引用它（`monitor_hang`、`mali_kbase`、`wlan_drv`、`cfg80211` 等）。
+只开 `CONFIG_KASAN=y` 不开 HW_TAGS 依然缺符号 → init 装模块失败。所以原厂这 5 项调试配置（KASAN / UBSAN / KFENCE / PAGE_OWNER / PANIC_ON_OOPS）本版本保持原厂原样。
+
+### 4. 符号完备性证明（不用再"开机试错"）
+
+把手机上 600 个已加载模块全部拉下来（`/vendor_dlkm` + `/system_dlkm` + `vendor_boot` ramdisk，共 646 个 `.ko`），解析 ELF 的 UND 符号全集，减去模块之间互相导出的符号，再与本内核 `System.map` 的 `__ksymtab_` 导出全集求差集：
+
+- 需要内核符号 **3391** 个 / 本内核导出 **15309** 个 / **缺口 22 个**
+- 22 个中：20 个只被第二阶段 OPLUS scx 调度模块引用（不影响启动）；2 个背光符号是 **WEAK**，内核加载器明确容忍
+
+明细：`verify/missing_symbols_run11.txt`；方法：`verify/stock_needed.py`。
+
+### 5. 其它构建修正
+
+- `CONFIG_MODULE_SIG_KEY`：原厂值依赖 `$(DEVICE_MODULES_REL_DIR)`，在开源编译时展开为空 → 覆盖为内核默认 `certs/signing_key.pem`（一次性密钥；`MODULE_SIG_FORCE=n`，不影响加载原厂模块）
+- LTO 与原厂一致用 `none`，CFI 保持开启
+- Droidspaces 必需配置：`SYSVIPC`、`POSIX_MQUEUE`、`PID_NS`、`IPC_NS`、`USER_NS`、`UTS_NS`、`NET_NS`、`CGROUPS/MEMCG/CGROUP_FREEZER`、`SECCOMP(_FILTER)`、`OVERLAY_FS`、`TMPFS(_XATTR/_POSIX_ACL)`、`DEVTMPFS`、`VETH`、`BRIDGE`、`MACVLAN` 等（见 `scripts/prepare.sh`）
+
+---
+
+## 四、目录结构
+
+```
+.github/workflows/build.yml   # 云端编译流水线（拉源码/打补丁/编译/断言/上传）
+config/
+  plf110_stock.config         # 本机原厂 /proc/config.gz（配置基线）
+  features.env                # 功能开关（true/false，改完重跑即可）
+scripts/prepare.sh            # 打补丁 + 生成 defconfig + 符号断言
+patches/
+  kabi_bypass.patch           # 跳过 genksyms CRC 校验（只警告不拒绝）
+docs/
+  VERIFIED_BUILD.md           # 已验证版本的完整技术记录
+  RELEASE_NOTES_v1.md         # Release 正文
+verify/                       # 符号完备性 / boot 镜像校验 / 厂商模块基线
+```
+
+---
+
+## 五、改功能
+
+编辑 `config/features.env`，把对应项改成 `true` / `false`，提交后重新 Run workflow：
+
+- `DROIDSPACES=true` —— 容器必需（默认开）
+- 其余默认 `false`：`BBR` / `BBRv3` / `NET_SCHED` / `IP_SET_NAT` / `TTL_TARGET` / `SDP_CHARGE` / `NTSYNC` / `NTFS3` / `SQUASHFS` / `UNICODE_FIX` / `PERF_TWEAKS` / `EXTRA_FS` / `CONTAINER_NET` / `NET_DEFAULTS`
+
+**关闭 ≠ 删除**：`prepare.sh` 会把每个关闭项写成 `# CONFIG_XXX is not set` 占位留在 defconfig 里，随时可改回。
+⚠️ `Image` 是直接跑在 boot 分区的内核，**所有功能必须内置（`=y`）**，脚本已按此处理。
+
+---
+
+## 六、已知限制
+
+1. **2 个 OPLUS scx 调度模块未加载**：`oplus_bsp_game_opt`（缺 4 个 `__tracepoint_android_vh_scx_*` 符号 → 加载失败）、`oplus_bsp_sched_ext`（依赖前者，未尝试）。公开内核源码没有 HMBIRD/scx 这部分（`CONFIG_HMBIRD_SCHED` 在各公开版本 Kconfig 中均不存在）。影响：OPLUS 游戏/性能调度不生效，原生调度与容器不受影响。
+2. **`/data` 上无法挂载 overlayfs**：该 f2fs 实例（dm-77，带 inlinecrypt/compress/casefold 特性）的 dentry 被 overlayfs 判为 unsupported；`/metadata`(f2fs)、ext4、tmpfs 正常。原厂同样限制，Droidspaces 用 loop ext4 镜像作容器根文件系统，不受影响。
+3. `SELinux = Permissive`（由 FolkPatch 设置，对容器有利）。
+4. 本版本为对齐原厂 ABI 保留 KASAN/UBSAN，**未做性能瘦身**；瘦身版需要补 `kasan_flag_enabled` 等导出桩（后续可做）。
+
+---
+
+## 七、排错
+
+| 现象 | 排查 |
+|---|---|
+| Actions 步骤标红 | 点开该步日志看 `::error::`；常见为网络超时（重跑）、补丁偏移变化 |
+| 配置没生效 | 看日志开头 `===== 生效开关：... =====` 与实际 `.config`；workflow 已有 fail-fast 断言 |
+| 刷完白屏/重启 | 进 fastboot 刷回 `stock_boot_original.img`；`adb` 起来后取 `/sys/fs/pstore/console-ramoops-0` 分析 |
+| 模块加载失败 | `adb shell 'su -c "dmesg \| grep -i \"Unknown symbol\""'`，对照 `verify/missing_symbols_run11.txt` |
+| 容器起不来 | `adb shell 'su -c "tail -50 /data/local/Droidspaces/Logs/droidspacesd.log"'` |
+
+---
+
+## 八、免责声明
+
+刷机有风险（变砖、数据丢失、失去保修）。本仓库所有镜像均在本机实测通过，但**请自行确认已备份原厂 boot/init_boot**（Release 里提供了原厂镜像）。
+不修改 `abl/xbl/tz/hyp/vbmeta` 等分区；刷写前请确认 `fastboot getvar unlocked` 为 `yes`。
