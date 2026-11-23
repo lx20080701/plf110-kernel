@@ -15,6 +15,7 @@
 | 启动耗时 | 开机到 `sys.boot_completed=1` 约 **22.8 秒** |
 
 - 📄 完整技术记录（构建参数 / kABI 处理 / 符号完备性证明 / 实机验证 / 回滚）：**[docs/VERIFIED_BUILD.md](docs/VERIFIED_BUILD.md)**
+- 📋 运行日志分析（开机→37 分钟：警告/崩溃/模块状态）：**[docs/RUNTIME_LOG_REPORT.md](docs/RUNTIME_LOG_REPORT.md)**
 - 🧪 验证工具与基线数据：**[verify/](verify/)**
 - 📦 全部成品镜像：**[Releases › `plf110-6.1.134-droidspaces-v1`](../../releases/tag/plf110-6.1.134-droidspaces-v1)**
 
