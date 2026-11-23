@@ -94,3 +94,25 @@ GitHub Actions 只产出 `Image`，还需要把 `Image` 塞回你手机的 boot.
 - Actions 页面那一步标红 → 点开看日志，把 **红字/最后 50 行** 发给我，我改脚本。
 - 常见：网络下载超时（重跑一次即可）、`patch` 拒绝应用（上游补丁更新了，我调偏移/换变体）。
 - 不要在没有备份的情况下刷任何东西。
+
+---
+
+## ✅ 已验证可启动版本（2026-11-23，run #11）
+
+本仓库当前状态：**自编内核已在本机成功启动，并跑起 Droidspaces 容器。**
+
+| 项目 | 结果 |
+|---|---|
+| 内核 | `6.1.134-g04555ae11869`，`boot_completed=1` |
+| 内核模块 | 598/600 原厂模块加载（缺 2 个 OPLUS scx 调度模块，无外设影响） |
+| root | FolkPatch 0.13.9 重打后正常（`uid=0(root)`） |
+| 外设 | 显示/触摸/指纹/传感器/WiFi/蓝牙/相机/音频/充电/USB/马达 全部验证通过 |
+| 容器 | Droidspaces v7.2.0，systemd running，Azure Linux 3.0，NAT 网络+DNS 正常 |
+
+- 完整记录（构建参数、kABI 处理、符号完备性证明、实机验证、回滚流程）：**[docs/VERIFIED_BUILD.md](docs/VERIFIED_BUILD.md)**
+- 验证脚本与基线数据：**[verify/](verify/)**
+- 成品镜像（boot / FolkPatch root 版 / Image / System.map / config + 校验值）：见本仓库 **Releases** 页面标签 `plf110-6.1.134-droidspaces-v1`
+
+关键补丁：
+- `patches/kabi_bypass.patch` —— 固件 16.0.2.401 源码未公开导致 genksyms CRC 与原厂 vendor 模块不一致；BTF 全量比对证明 ABI 兼容后，让内核只警告不拒绝加载（`KABI_BYPASS=true`）
+- `prepare.sh` 中 kABI 红线 + Droidspaces 配置 + 符号断言（KASAN_HW_TAGS / UBSAN / MODVERSIONS / Module.symvers 导出检查）
