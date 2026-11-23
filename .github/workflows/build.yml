@@ -123,6 +123,7 @@ jobs:
       - name: Build Image
         run: |
           set -e
+          set -o pipefail   # 否则 make | tee 会把编译失败吞成 success（run4 的教训）
           cd "$KDIR"
           set -a
           . "$GITHUB_WORKSPACE/config/features.env"

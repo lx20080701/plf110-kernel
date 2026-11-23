@@ -427,9 +427,18 @@ EOF
 fi
 
 # ------------------------------------------------------------
-# 6. 其它小配置（本次不动）
+# 6. 构建必需修正 + 其它小配置（本次不动）
 # ------------------------------------------------------------
 cat >> "$cfg" <<'EOF'
+
+# ==== 构建必需：模块签名密钥 ====
+# 原厂 config 是 CONFIG_MODULE_SIG_KEY="$(DEVICE_MODULES_REL_DIR)/certs/mtk_signing_key.pem"
+# —— $(DEVICE_MODULES_REL_DIR) 只在 OPPO 内部 build 里定义，OSS 编译时展开成空字符串，
+#    就变成绝对路径 /certs/mtk_signing_key.pem；certs/signing_key.x509 找不到依赖 →
+#    make 直接失败："No rule to make target '/certs/mtk_signing_key.pem'"（run4 就是死在这）。
+# 改回内核默认值 certs/signing_key.pem：构建系统会自动生成一次性密钥。
+# MODULE_SIG_FORCE 原厂就是 =n，所以不影响加载原厂 vendor 模块。
+CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"
 
 # ==== 杂项 ====
 CONFIG_NLS_DEFAULT="utf8"
