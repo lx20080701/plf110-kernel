@@ -24,12 +24,12 @@ env:
   #   对应 OnePlusOSS 上最接近的同步 = PLF110_16.0.0.203（2025-12-18），内核同样是 6.1.134
   #   （之前用 16.0.5.701 + Google gki_defconfig 导致 init 起不来，详见 README）
   KERNEL_REPO: OnePlusOSS/android_kernel_oneplus_mt6989
-  KERNEL_COMMIT: 700216a47c96d5b8c3247779730e308173dd7003
+  KERNEL_COMMIT: 76bcc45d34eac1a834830b356d0589020f4be059
   # 厂商 modules/devicetree 树：内核树里的 drivers/soc/oplus/* 等是符号链接，
   # 指向 ../../../../vendor/oplus/...（OPLUS kernel_platform 布局），必须一起取，
   # 否则 Kconfig 解析直接失败：can't open file "drivers/soc/oplus/oplus_resctrl/Kconfig"
   MODULES_REPO: OnePlusOSS/android_kernel_modules_and_devicetree_oneplus_mt6989
-  MODULES_COMMIT: ae37b666a22318d9de00ba011ac1e71ab1f1d010
+  MODULES_COMMIT: efa5a76b4a472e8dfbeea906fb6c05e931334e68
   PATCH_RAW: https://raw.githubusercontent.com/WildKernels/kernel_patches/main
   CLANG_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/clang-28b975ada54f8610ed531a6b57253aed10e7c87d.tar.gz
   AK3_URL: https://github.com/WildKernels/OnePlus_KernelSU_SUSFS/releases/download/toolchain-cache/AnyKernel3-0b46673ae91aee8d60bd6ee257b4d56d3f6a0114.tar.gz
