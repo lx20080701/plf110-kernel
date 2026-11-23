@@ -180,7 +180,7 @@ fastboot reboot
 | 项目 | 结果 |
 |---|---|
 | 启动 | `boot_completed=1`，无 panic / BUG / Oops |
-| 原厂模块 | `lsmod` = 599 / 600（2 个 OPLUS scx 模块仍因公开源码缺 HMBIRD 而无法加载） |
+| 原厂模块 | `lsmod` = 598 / 600（输出 599 行含表头；2 个 OPLUS scx 模块仍因公开源码缺 HMBIRD 而无法加载） |
 | 模块错误 | dmesg `Unknown symbol` 仅 8 条，全部是 `oplus_bsp_game_opt` 的 4 个 scx tracepoint（已知，无外设影响） |
 | `/dev/ntsync` | `crw------- root root 10,125` ✅ |
 | cgroup 控制器 | `/sys/fs/cgroup/cgroup.controllers` 含 `pids` ✅ |

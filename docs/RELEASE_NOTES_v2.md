@@ -62,7 +62,7 @@ fastboot reboot
 ## 实机验证记录
 
 - 内核 `6.1.134-g9d2fb6767847`，`boot_completed=1`，开机无 panic/BUG/Oops
-- 原厂模块 **599 / 600** 加载（缺的 2 个仍是公开源码没有 HMBIRD/scx 的那两个，无外设影响）
+- 原厂模块 **598 / 600** 加载（`lsmod` 输出 599 行含表头；缺的 2 个仍是公开源码没有 HMBIRD/scx 的那两个，无外设影响）
 - `droidspaces check`：**全绿**，IPv6 NAT / CPU limit / Process limit 三项从 ✗ 变 ✓
 - 容器限额实测：`--cpus 2 --pids-limit 200` → `cpu_quota=200000/100000`、`pids.max=200` 生效
 - NTsync 实测：容器内 + 宿主 root 均通过 `CREATE_SEM / SEM_RELEASE / SEM_READ / EVENT set+read`（`NTSYNC_TEST_PASS`）

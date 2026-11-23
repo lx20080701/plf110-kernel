@@ -9,7 +9,7 @@
 |---|---|
 | 设备 | OnePlus PLF110 / MT6989 / Android 16（固件 16.0.2.401） |
 | 内核 | `6.1.134-g9d2fb6767847`（CFI 开、LTO=none、KASAN_HW_TAGS，与原厂 ABI 对齐） |
-| 内核模块 | 599 / 600 原厂模块加载成功（缺 2 个 OPLUS scx 性能调度模块，无外设影响） |
+| 内核模块 | **598 / 600** 原厂模块加载成功（`lsmod` 输出 599 行含表头；缺 2 个 OPLUS scx 性能调度模块，无外设影响） |
 | root | FolkPatch 0.13.9（`su -c id` → `uid=0(root)`） |
 | 容器 | Droidspaces v7.2.0，`systemctl is-system-running` = **running**，IP `172.28.186.11`，外网/DNS 通 |
 | 新增能力 | ✅ NTsync（`/dev/ntsync`，实测 ioctl PASS）｜✅ `--cpus` / `--pids-limit` 生效｜✅ IPv6 NAT｜✅ CVE 修复 |
