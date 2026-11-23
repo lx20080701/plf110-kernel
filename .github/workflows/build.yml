@@ -119,7 +119,8 @@ jobs:
           # features.env 与 workflow 输入共享键名时，后 source 的会覆盖 workflow 传的值
           # （run10 就是 DEBUG_INFO=true 被 features.env 里的 false 吃掉，白编 16 分钟）。
           # 这里加闸门：features.env 出现 workflow 拥有的键 → 立即失败。
-          if grep -nE '^(DEBUG_INFO|KABI_BYPASS|LTO_MODE)=' config/features.env; then
+          # 注意 KABI_BYPASS 不是 workflow 输入（prepare.sh 自己默认 true），允许出现在 features.env。
+          if grep -nE '^(DEBUG_INFO|LTO_MODE)=' config/features.env; then
             echo "::error::config/features.env 含 workflow 拥有的键，会反向覆盖输入"
             exit 1
           fi
@@ -215,19 +216,36 @@ jobs:
           echo "diff 变更行数: $(grep -c '^[+-]' "$GITHUB_WORKSPACE/artifacts/stock_vs_final.diff" || true)"
           sed -n '1,140p' "$GITHUB_WORKSPACE/artifacts/stock_vs_final.diff" || true
 
-          # 5) 可选功能（本次全部 false，只有 true 时才断言）
+          # 5) 第二批增强：true 时必须硬断言（防止补丁没打上还白编一轮）
+          #    补丁来源 Goldzxcbug/Droidspaces_Kernel_patch @dc0f76b，已 vendored 到 patches/
+          if [ "${NTSYNC:-false}" = "true" ]; then
+            check NTSYNC
+            grep -q 'NTSYNC_NAME' "$KDIR/drivers/misc/ntsync.c" \
+              || { echo "::error::NTsync 源码未就位"; exit 1; }
+          fi
+          if [ "${CGROUP_LIMITS:-false}" = "true" ]; then
+            check CGROUP_PIDS
+            check CFS_BANDWIDTH
+            grep -q 'CGROUP_SUBSYS_COUNT_ACTIVE' "$KDIR/include/linux/cgroup-defs.h" \
+              || { echo "::error::cgroup 限制补丁未生效"; exit 1; }
+          fi
+          if [ "${USERNS_CVE:-false}" = "true" ]; then
+            grep -q 'waiter_task' "$KDIR/kernel/locking/rtmutex.c" \
+              || { echo "::error::CVE-2026-43499 补丁未生效"; exit 1; }
+          fi
+          if [ "${IP_SET_NAT:-false}" = "true" ]; then
+            check IP_SET
+            check IP6_NF_NAT
+            check IP6_NF_TARGET_MASQUERADE
+          fi
           if [ "${BBR:-false}" = "true" ]; then check TCP_CONG_BBR; fi
           if [ "${NET_SCHED:-false}" = "true" ]; then check NET_SCH_CAKE; fi
-          if [ "${IP_SET_NAT:-false}" = "true" ]; then check IP_SET; check IP6_NF_NAT; fi
           if [ "${NTFS3:-false}" = "true" ]; then check NTFS3_FS; fi
           if [ "${SQUASHFS:-false}" = "true" ]; then check SQUASHFS; fi
           if [ "${EXTRA_FS:-false}" = "true" ]; then
             check ISO9660_FS; check UDF_FS; check CIFS; check NFS_FS
           fi
           if [ "${CONTAINER_NET:-false}" = "true" ]; then check IPVLAN; fi
-          if [ "${NTSYNC:-false}" = "true" ]; then
-            grep -q '^CONFIG_NTSYNC=y$' out/.config || echo "::warning::NTSync 未生效（补丁未应用全）"
-          fi
           if [ "${NET_DEFAULTS:-false}" = "true" ]; then
             grep -q '^CONFIG_DEFAULT_BBR=y$' out/.config || echo "::warning::DEFAULT_BBR 未生效"
             grep -q '^CONFIG_DEFAULT_FQ=y$' out/.config || echo "::warning::DEFAULT_FQ 未生效"
@@ -252,6 +270,22 @@ jobs:
           ls -lh "$IMG"
           strings "$IMG" | grep -E 'Linux version 6\.1\.134' | head -n 2 \
             || { echo "::error::kernel version is not 6.1.134"; exit 1; }
+
+          # ---- 第二批增强的构建产物断言 ----
+          set -a
+          . "$GITHUB_WORKSPACE/config/features.env"
+          set +a
+          if [ "${NTSYNC:-false}" = "true" ]; then
+            [ -f "$KDIR/out/drivers/misc/ntsync.o" ] \
+              || { echo "::error::ntsync.o 没有编出来（CONFIG_NTSYNC=y 但目标缺失）"; exit 1; }
+            echo "OK ntsync.o: $(ls -l "$KDIR/out/drivers/misc/ntsync.o" | awk '{print $5}') bytes"
+            strings "$IMG" | grep -qi 'ntsync' \
+              && echo "OK Image 内含 ntsync 字符串（内建设备 /dev/ntsync）" \
+              || echo "::warning::Image 里未搜到 ntsync 字符串，刷机后请检查 /dev/ntsync"
+          fi
+          if [ "${CGROUP_LIMITS:-false}" = "true" ]; then
+            echo "OK cgroup limits: CGROUP_PIDS/CFS_BANDWIDTH 已在配置断言中通过"
+          fi
 
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
           cp "$IMG" "$GITHUB_WORKSPACE/artifacts/Image"

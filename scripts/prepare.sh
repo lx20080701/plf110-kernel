@@ -8,7 +8,13 @@
 #     STOCK_CONFIG=$PWD/config/plf110_stock.config \
 #     bash scripts/prepare.sh
 #
-#  【本次策略：最小可用集】只保留 Droidspaces 容器必需项。
+#  【本次策略：最小可用集 + 第二批增强】
+#  第一批（run11 已验证）：Droidspaces 容器能跑起来。
+#  第二批（run12，补丁来源 Goldzxcbug/Droidspaces_Kernel_patch @dc0f76b）：
+#    NTSYNC        Wine / Windows 程序所需的 NT 同步原语（drivers/misc/ntsync）
+#    CGROUP_LIMITS 容器 --cpus / --pids-limit 所需 CGROUP_PIDS + CFS_BANDWIDTH
+#    USERNS_CVE    user namespace 提权漏洞修复（CVE-2026-43499，rtmutex）
+#    IP_SET_NAT    IPv6 NAT（Droidspaces check 里唯一缺的网络项）
 #  关闭的功能不删除 —— 仍然写入 "# CONFIG_XXX is not set" 占位，
 #  这样 defconfig 里能一眼看到每个功能当前状态，改 true 即可恢复。
 # ============================================================
@@ -21,7 +27,7 @@ set -euo pipefail
 cd "$KDIR"
 
 say() { printf '\n===== %s =====\n' "$*"; }
-say "生效开关：DROIDSPACES=${DROIDSPACES:-true} KABI_BYPASS=${KABI_BYPASS:-true} DEBUG_INFO=${DEBUG_INFO:-false} LTO_MODE=${LTO_MODE:-none}"
+say "生效开关：DROIDSPACES=${DROIDSPACES:-true} KABI_BYPASS=${KABI_BYPASS:-true} NTSYNC=${NTSYNC:-false} CGROUP_LIMITS=${CGROUP_LIMITS:-false} USERNS_CVE=${USERNS_CVE:-false} IP_SET_NAT=${IP_SET_NAT:-false} DEBUG_INFO=${DEBUG_INFO:-false} LTO_MODE=${LTO_MODE:-none}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -34,6 +40,29 @@ apply_optional() {
     return 0
   fi
   echo "::warning::可选补丁未能应用：$1（已跳过）"
+  return 1
+}
+
+# 强制补丁：先用 --dry-run 全量校验（保证整份 patch 能套上），再真正应用。
+# 这样可以避免 patch 套到一半失败、源码留下半套改动再去编译。
+apply_required() {
+  say "应用补丁（强制，先 dry-run 校验）：$1"
+  if ! patch -p1 --forward --fuzz=3 --dry-run < "$2" >/dev/null 2>&1; then
+    echo "::error::补丁无法应用到本内核源码：$1"
+    patch -p1 --forward --fuzz=3 --dry-run < "$2" 2>&1 | tail -n 30 || true
+    exit 1
+  fi
+  patch -p1 --forward --fuzz=3 < "$2"
+}
+
+# 可选补丁（先校验版）：校验不通过就整份跳过，绝不留半套改动
+apply_safe_optional() {
+  say "应用可选补丁（先 dry-run 校验）：$1"
+  if patch -p1 --forward --fuzz=3 --dry-run < "$2" >/dev/null 2>&1; then
+    patch -p1 --forward --fuzz=3 < "$2"
+    return 0
+  fi
+  echo "::warning::可选补丁无法应用，已整份跳过：$1"
   return 1
 }
 
@@ -95,12 +124,40 @@ if [ "${BBRV3:-false}" = "true" ]; then
 fi
 
 if [ "${NTSYNC:-false}" = "true" ]; then
-  NTSYNC_PARTS=0
-  fetch "$PATCH_RAW/common/ntsync/ntsync_compat_android14-6.1.patch" "$tmp/ntsync_compat.patch"
-  if apply_optional "NTSync compat (android14-6.1)" "$tmp/ntsync_compat.patch"; then NTSYNC_PARTS=$((NTSYNC_PARTS+1)); fi
-  fetch "$PATCH_RAW/common/ntsync/ntsync_base.patch" "$tmp/ntsync_base.patch"
-  if apply_optional "NTSync base" "$tmp/ntsync_base.patch"; then NTSYNC_PARTS=$((NTSYNC_PARTS+1)); fi
-  if [ "$NTSYNC_PARTS" -eq 2 ]; then NTSYNC_OK=true; fi
+  # 来源：Goldzxcbug/Droidspaces_Kernel_patch @dc0f76bedd790b7738e5695509297ee71ca4a2c2
+  #       （README 标注 NTsync 所需补丁 = ntsync_base + ntsync_<android版本>-<内核版本>）
+  apply_required "NTsync base（drivers/misc/ntsync.c + include/uapi/linux/ntsync.h）" \
+    "$GITHUB_WORKSPACE/patches/ds_ntsync_base.patch"
+  apply_required "NTsync compat（android14-6.1：drivers/misc/Kconfig + Makefile）" \
+    "$GITHUB_WORKSPACE/patches/ds_ntsync_compat_android14-6.1.patch"
+  grep -q 'NTSYNC_NAME' drivers/misc/ntsync.c \
+    || { echo "::error::NTsync 驱动源码校验失败"; exit 1; }
+  grep -q 'obj-$(CONFIG_NTSYNC)' drivers/misc/Makefile \
+    || { echo "::error::NTsync Makefile 校验失败"; exit 1; }
+  NTSYNC_OK=true
+fi
+
+if [ "${CGROUP_LIMITS:-false}" = "true" ]; then
+  # 原厂 6.1.134 config 里 CONFIG_CGROUP_PIDS / CONFIG_CFS_BANDWIDTH 是关的
+  # （Droidspaces check 里 [✗] CPU limit / [✗] Process limit）。
+  # 这两个功能在 Android KMI 冻结后才被打开会改 cgroup 子系统编号/数组边界，
+  # 这个补丁用 "ABI 可见数组保持原边界、cgroup core 走额外运行时槽位" 的方式
+  # 兼容原厂预编译模块。改 Droidspaces 容器限额验证用。
+  apply_required "cgroup 限制 KMI 兼容补丁（CGROUP_PIDS + CFS_BANDWIDTH）" \
+    "$GITHUB_WORKSPACE/patches/ds_cgroup_limits_6.1.patch"
+  grep -q 'CGROUP_SUBSYS_COUNT_ACTIVE' include/linux/cgroup-defs.h \
+    || { echo "::error::cgroup 限制补丁内容校验失败"; exit 1; }
+  CGROUP_LIMITS_OK=true
+fi
+
+if [ "${USERNS_CVE:-false}" = "true" ]; then
+  # CVE-2026-43499：user namespace 下 rtmutex remove_waiter() 用 current 而非
+  # waiter->task，可被用来提权。本内核 CONFIG_USER_NS=y，建议补上。
+  # 补丁按 6.1 系列的后向移植版本打（我们的 6.1.134 上下文兼容，已在本地 dry-run 验证）。
+  apply_required "CVE-2026-43499 user-namespace rtmutex 修复（6.1）" \
+    "$GITHUB_WORKSPACE/patches/ds_cve_userns_rtmutex_6.1.patch"
+  grep -q 'waiter_task' kernel/locking/rtmutex.c \
+    || { echo "::error::CVE 补丁内容校验失败"; exit 1; }
 fi
 
 if [ "${UNICODE_FIX:-false}" = "true" ]; then
@@ -287,8 +344,18 @@ fi
 if [ "${NTSYNC_OK:-false}" = "true" ]; then
 cat >> "$cfg" <<'EOF'
 
-# ==== NTSync（Wine / Windows 游戏）====
+# ==== NTSync（Wine / Windows 程序；补丁源码见 patches/ds_ntsync_*.patch）====
 CONFIG_NTSYNC=y
+EOF
+fi
+
+if [ "${CGROUP_LIMITS_OK:-false}" = "true" ]; then
+cat >> "$cfg" <<'EOF'
+
+# ==== 容器 CPU / PID 限额（Droidspaces --cpus / --pids-limit）====
+# 依赖 patches/ds_cgroup_limits_6.1.patch（KMI 兼容版，保持原厂模块 ABI 边界）
+CONFIG_CGROUP_PIDS=y
+CONFIG_CFS_BANDWIDTH=y
 EOF
 fi
 
