@@ -45,3 +45,25 @@ fastboot reboot
 - 本版本为对齐原厂 ABI 保留 KASAN/UBSAN，未做性能瘦身
 
 完整记录见仓库 `docs/VERIFIED_BUILD.md`。
+
+## 原厂 / 回滚镜像（同 Release 内，均可下载）
+
+| 资产名 | 内容 | 大小 | sha256 |
+|---|---|---|---|
+| `stock_boot_original.img` | **完整原厂 boot**（内核 `6.1.134-android14-11-o-g8f3b9b4f58d8`，未做任何改动，kernel 35,816,160 B） | 67,108,864 | `16b0b00eb63ef046f2422d39e286bade44a123a1abd28aeb1f45f27b002ca201` |
+| `stock_boot_folkpatch_root.img` | **原厂内核 + FolkPatch 0.13.9 root**（实测可正常启动并带 root；与本次改造前设备 `boot_a` 内容一致，即最稳的救砖镜像） | 67,108,864 | `224794ed8a2d3aab33fc15ab7524d23572ae48c302a01d6b871bcd6292b10bd2` |
+| `stock_init_boot_original.img` | **原厂 init_boot**（generic ramdisk 3,270,374 B，完整回滚时配套使用） | 8,388,608 | `917dacdf28781f59a9bf1e8c57c3ab04da3d665173b5ed72da5340cca82b304c` |
+
+刷机命令：
+
+```bash
+adb reboot bootloader
+# 回到完全原厂
+fastboot flash boot stock_boot_original.img
+fastboot flash init_boot stock_init_boot_original.img     # 可选，仅当之前动过 init_boot
+# 或者：原厂内核 + root
+fastboot flash boot stock_boot_folkpatch_root.img
+fastboot reboot
+```
+
+> 本机 `fastboot boot`（临时启动）不支持，只能 flash；解锁状态下校验已关闭，原厂镜像可直接刷。
